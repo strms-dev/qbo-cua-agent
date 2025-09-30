@@ -6,21 +6,45 @@ import { Monitor, Play, Pause, Square, RefreshCw } from 'lucide-react';
 interface BrowserPanelProps {
   browserSessionId: string | null;
   chatSessionId: string | null;
+  streamUrl?: string | null;
+  agentActive?: boolean; // Add flag to track if agent is currently active
 }
 
-export default function BrowserPanel({ browserSessionId, chatSessionId }: BrowserPanelProps) {
+export default function BrowserPanel({ browserSessionId, chatSessionId, streamUrl, agentActive = false }: BrowserPanelProps) {
   const [browserUrl, setBrowserUrl] = useState<string>('');
-  const [sessionStatus, setSessionStatus] = useState<'active' | 'paused' | 'stopped'>('stopped');
+  const [sessionStatus, setSessionStatus] = useState<'active' | 'paused' | 'stopped' | 'demo' | 'not_found' | 'error'>('stopped');
   const [isLoading, setIsLoading] = useState(false);
   const [lastScreenshot, setLastScreenshot] = useState<string>('');
+
+  // Debug logging
+  console.log('🖥️ BrowserPanel props:', {
+    browserSessionId,
+    streamUrl,
+    sessionStatus,
+    agentActive,
+    showIframe: streamUrl && sessionStatus === 'active'
+  });
 
   useEffect(() => {
     if (browserSessionId) {
       fetchSessionStatus();
-      const interval = setInterval(fetchSessionStatus, 5000); // Poll every 5 seconds
-      return () => clearInterval(interval);
+
+      // Improved polling logic - only poll when necessary
+      const shouldPoll = (
+        // Poll if agent is actively working
+        agentActive ||
+        // Or if we don't have a live stream URL yet
+        (!streamUrl && sessionStatus !== 'stopped') ||
+        // Or if session status indicates it needs monitoring
+        (sessionStatus === 'paused' || sessionStatus === 'error')
+      );
+
+      if (shouldPoll) {
+        const interval = setInterval(fetchSessionStatus, agentActive ? 5000 : 15000); // Poll more frequently during agent activity
+        return () => clearInterval(interval);
+      }
     }
-  }, [browserSessionId]);
+  }, [browserSessionId, streamUrl, sessionStatus, agentActive]);
 
   const fetchSessionStatus = async () => {
     if (!browserSessionId) return;
@@ -156,7 +180,44 @@ export default function BrowserPanel({ browserSessionId, chatSessionId }: Browse
 
       {/* Browser Content */}
       <div className="flex-1 bg-white relative">
-        {lastScreenshot ? (
+        {/* Debug info */}
+        <div className="absolute top-2 right-2 bg-black bg-opacity-75 text-white text-xs p-2 rounded z-10">
+          Status: {sessionStatus} | Agent: {agentActive ? 'ACTIVE' : 'IDLE'} | StreamUrl: {streamUrl ? 'YES' : 'NO'} | Show: {streamUrl ? 'YES' : 'NO'}
+        </div>
+
+        {/* Live Stream View - Show iframe whenever we have streamUrl */}
+        {streamUrl ? (
+          <div className="h-full flex flex-col">
+            <div className="flex-1 overflow-hidden">
+              <iframe
+                src={streamUrl}
+                className="w-full h-full border-0"
+                allow="clipboard-write"
+                title="Live Browser Session"
+                onLoad={() => console.log('✅ Live stream iframe loaded successfully')}
+                onError={(e) => console.error('❌ Live stream iframe failed to load:', e)}
+                style={{ minHeight: '400px' }}
+              />
+            </div>
+            <div className={`p-2 text-xs text-center border-t ${
+              sessionStatus === 'active'
+                ? 'bg-green-50 text-green-700 border-green-200'
+                : agentActive
+                ? 'bg-blue-50 text-blue-700 border-blue-200'
+                : 'bg-yellow-50 text-yellow-700 border-yellow-200'
+            }`}>
+              {sessionStatus === 'active' && !agentActive ? (
+                <>🟢 Live Browser Session Ready | URL: {streamUrl}</>
+              ) : agentActive ? (
+                <>🔵 Agent Working - Live Browser Session | URL: {streamUrl}</>
+              ) : (
+                <>⚠️ Live Browser Session (Status: {sessionStatus}) | URL: {streamUrl}</>
+              )}
+            </div>
+          </div>
+        ) :
+        /* Screenshot Fallback */
+        lastScreenshot ? (
           <div className="h-full flex flex-col">
             <div className="flex-1 overflow-hidden">
               <img
@@ -165,8 +226,8 @@ export default function BrowserPanel({ browserSessionId, chatSessionId }: Browse
                 className="w-full h-full object-contain bg-white"
               />
             </div>
-            <div className="p-2 bg-gray-50 text-xs text-gray-600 text-center border-t">
-              Live browser view - Updates automatically during agent interactions
+            <div className="p-2 bg-blue-50 text-xs text-blue-700 text-center border-t border-blue-200">
+              📸 Latest Screenshot - Click Screenshot button to refresh
             </div>
           </div>
         ) : sessionStatus === 'active' ? (
@@ -174,6 +235,17 @@ export default function BrowserPanel({ browserSessionId, chatSessionId }: Browse
             <div className="text-center">
               <div className="animate-spin w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full mx-auto mb-4"></div>
               <p className="text-gray-600">Loading browser session...</p>
+              <p className="text-sm text-gray-500 mt-2">Setting up live stream...</p>
+            </div>
+          </div>
+        ) : sessionStatus === 'demo' ? (
+          <div className="h-full flex items-center justify-center">
+            <div className="text-center">
+              <Monitor className="w-12 h-12 mx-auto mb-4 text-gray-400" />
+              <p className="text-gray-600">Browser session is demo</p>
+              <p className="text-sm text-gray-500 mt-2">
+                Start a conversation to create a browser session
+              </p>
             </div>
           </div>
         ) : (

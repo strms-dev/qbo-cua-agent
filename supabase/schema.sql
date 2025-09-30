@@ -102,3 +102,28 @@ $$ language 'plpgsql';
 -- Add updated_at triggers
 CREATE TRIGGER update_chat_sessions_updated_at BEFORE UPDATE ON chat_sessions FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_browser_sessions_last_activity BEFORE UPDATE ON browser_sessions FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Screenshots Table (for storing base64 screenshots and metadata)
+CREATE TABLE screenshots (
+  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  session_id UUID REFERENCES chat_sessions(id) ON DELETE CASCADE,
+  message_id UUID REFERENCES messages(id) ON DELETE CASCADE,
+  action_id UUID REFERENCES computer_actions(id) ON DELETE CASCADE,
+  base64_data TEXT NOT NULL,
+  thumbnail_data TEXT, -- Smaller version for display
+  width INTEGER,
+  height INTEGER,
+  mime_type TEXT DEFAULT 'image/png',
+  file_size INTEGER,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  metadata JSONB DEFAULT '{}'::jsonb
+);
+
+-- Index for screenshots
+CREATE INDEX idx_screenshots_session_id ON screenshots(session_id);
+CREATE INDEX idx_screenshots_message_id ON screenshots(message_id);
+CREATE INDEX idx_screenshots_created_at ON screenshots(created_at DESC);
+
+-- RLS for screenshots
+ALTER TABLE screenshots ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations on screenshots" ON screenshots FOR ALL USING (true);

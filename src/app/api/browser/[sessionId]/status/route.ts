@@ -7,37 +7,81 @@ export async function GET(
 ) {
   try {
     const { sessionId } = await params;
+    console.log('🔍 Checking browser session status:', sessionId);
 
-    // Get session from Scrapybara
-    const sessionData = await scrapybaraClient.getSession(sessionId);
-
-    // Update our database
-    await supabase
-      .from('browser_sessions')
-      .update({
-        status: sessionData.status,
-        last_activity_at: new Date().toISOString(),
-      })
-      .eq('scrapybara_session_id', sessionId);
-
-    // Get latest screenshot if session is active
-    let screenshot = null;
-    if (sessionData.status === 'active') {
-      try {
-        const screenshotData = await scrapybaraClient.takeScreenshot(sessionId);
-        screenshot = screenshotData.screenshot;
-      } catch (error) {
-        console.error('Failed to get screenshot:', error);
-      }
+    // Handle demo/test sessions
+    if (sessionId.startsWith('demo-') || sessionId.startsWith('test-')) {
+      console.log('📝 Demo session detected');
+      return Response.json({
+        status: 'demo',
+        browserUrl: 'Demo mode - no actual browser',
+        screenshot: null,
+        message: 'This is a demo session. Create a real browser session by asking me to navigate to a website!'
+      });
     }
 
+    // Try to get session from Scrapybara
+    try {
+      const sessionData = await scrapybaraClient.getSession(sessionId);
+      console.log('✅ Scrapybara session found:', sessionData.status);
+
+      // Map Scrapybara status to our expected status
+      const mappedStatus = sessionData.status === 'running' ? 'active' : sessionData.status;
+      console.log('🔄 Status mapped:', sessionData.status, '->', mappedStatus);
+
+      // Update our database
+      try {
+        await supabase
+          .from('browser_sessions')
+          .update({
+            status: mappedStatus,
+            last_activity_at: new Date().toISOString(),
+          })
+          .eq('scrapybara_session_id', sessionId);
+      } catch (dbError) {
+        console.error('⚠️ Database update failed:', dbError);
+      }
+
+      // Get latest screenshot if session is active/running
+      let screenshot = null;
+      if (sessionData.status === 'running' || sessionData.status === 'active') {
+        try {
+          const screenshotData = await scrapybaraClient.takeScreenshot(sessionId);
+          screenshot = screenshotData.screenshot;
+          console.log('📸 Screenshot captured');
+        } catch (error) {
+          console.error('⚠️ Failed to get screenshot:', error);
+        }
+      }
+
+      return Response.json({
+        status: mappedStatus,
+        browserUrl: sessionData.browser_url,
+        screenshot,
+      });
+
+    } catch (scrapybaraError: any) {
+      console.error('❌ Scrapybara session not found:', scrapybaraError.message);
+
+      // Session doesn't exist on Scrapybara
+      if (scrapybaraError.message?.includes('404')) {
+        return Response.json({
+          status: 'not_found',
+          browserUrl: null,
+          screenshot: null,
+          message: `Session ${sessionId} not found. Please start a new conversation to create a browser session.`
+        });
+      }
+
+      throw scrapybaraError;
+    }
+
+  } catch (error: any) {
+    console.error('❌ Failed to get session status:', error);
     return Response.json({
-      status: sessionData.status,
-      browserUrl: sessionData.browser_url,
-      screenshot,
-    });
-  } catch (error) {
-    console.error('Failed to get session status:', error);
-    return Response.json({ error: 'Failed to get session status' }, { status: 500 });
+      status: 'error',
+      error: 'Failed to get session status',
+      message: error?.message || 'Unknown error'
+    }, { status: 500 });
   }
 }
