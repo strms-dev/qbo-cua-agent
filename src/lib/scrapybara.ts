@@ -140,7 +140,15 @@ export class ScrapybaraClient {
 
       const computerResponse = await browserInstance.computer(computerRequest);
 
-      console.log('✅ Action completed:', computerResponse);
+      // Truncate base64Image for logging
+      const logResponse = computerResponse.base64Image
+        ? {
+            ...computerResponse,
+            base64Image: computerResponse.base64Image.substring(0, 100) + '...'
+          }
+        : computerResponse;
+
+      console.log('✅ Action completed:', logResponse);
       return computerResponse;
     } catch (error) {
       console.error('❌ Failed to perform action:', error);

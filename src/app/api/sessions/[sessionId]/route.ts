@@ -38,32 +38,6 @@ export async function GET(
       );
     }
 
-    // Fetch screenshots for this session
-    const { data: screenshots, error: screenshotsError } = await supabase
-      .from('screenshots')
-      .select('*')
-      .eq('session_id', sessionId)
-      .order('created_at', { ascending: true });
-
-    if (screenshotsError) {
-      console.warn('Failed to fetch screenshots:', screenshotsError);
-    }
-
-    // Get public URLs for screenshots
-    const screenshotsWithUrls = screenshots?.map(screenshot => {
-      // Extract filename from potential storage path
-      const filename = `${sessionId}/${screenshot.created_at}.png`;
-
-      const { data: urlData } = supabase.storage
-        .from('cua-screenshots')
-        .getPublicUrl(filename);
-
-      return {
-        ...screenshot,
-        publicUrl: urlData.publicUrl
-      };
-    }) || [];
-
     // Sort messages by creation time
     const sortedMessages = session.messages?.sort((a: any, b: any) =>
       new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
@@ -79,9 +53,7 @@ export async function GET(
         metadata: session.metadata
       },
       messages: sortedMessages,
-      screenshots: screenshotsWithUrls,
-      totalMessages: sortedMessages.length,
-      totalScreenshots: screenshotsWithUrls.length
+      totalMessages: sortedMessages.length
     });
   } catch (error: any) {
     console.error('Error in GET /api/sessions/[sessionId]:', error);

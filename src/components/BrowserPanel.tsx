@@ -12,7 +12,7 @@ interface BrowserPanelProps {
 
 export default function BrowserPanel({ browserSessionId, chatSessionId, streamUrl, agentActive = false }: BrowserPanelProps) {
   const [browserUrl, setBrowserUrl] = useState<string>('');
-  const [sessionStatus, setSessionStatus] = useState<'active' | 'paused' | 'stopped' | 'demo' | 'not_found' | 'error'>('stopped');
+  const [sessionStatus, setSessionStatus] = useState<'active' | 'paused' | 'stopped' | 'terminated' | 'demo' | 'not_found' | 'error'>('stopped');
   const [isLoading, setIsLoading] = useState(false);
   const [lastScreenshot, setLastScreenshot] = useState<string>('');
 
@@ -25,24 +25,38 @@ export default function BrowserPanel({ browserSessionId, chatSessionId, streamUr
     showIframe: streamUrl && sessionStatus === 'active'
   });
 
+  // Initial fetch when browserSessionId changes
   useEffect(() => {
     if (browserSessionId) {
       fetchSessionStatus();
+    }
+  }, [browserSessionId]);
 
-      // Improved polling logic - only poll when necessary
-      const shouldPoll = (
+  // Polling interval management based on current state
+  useEffect(() => {
+    if (!browserSessionId) return;
+
+    // Define terminal states that should never be polled
+    const terminalStates = ['stopped', 'terminated', 'not_found'];
+
+    // Improved polling logic - only poll when necessary
+    const shouldPoll = (
+      // Don't poll if session is in a terminal state
+      !terminalStates.includes(sessionStatus) &&
+      (
         // Poll if agent is actively working
         agentActive ||
         // Or if we don't have a live stream URL yet
-        (!streamUrl && sessionStatus !== 'stopped') ||
+        !streamUrl ||
         // Or if session status indicates it needs monitoring
-        (sessionStatus === 'paused' || sessionStatus === 'error')
-      );
+        sessionStatus === 'paused' ||
+        sessionStatus === 'error'
+      )
+    );
 
-      if (shouldPoll) {
-        const interval = setInterval(fetchSessionStatus, agentActive ? 5000 : 15000); // Poll more frequently during agent activity
-        return () => clearInterval(interval);
-      }
+    if (shouldPoll) {
+      const interval = setInterval(fetchSessionStatus, agentActive ? 5000 : 15000); // Poll more frequently during agent activity
+      return () => clearInterval(interval);
     }
   }, [browserSessionId, streamUrl, sessionStatus, agentActive]);
 

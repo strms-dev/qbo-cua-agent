@@ -6,7 +6,17 @@
       "WebFetch(domain:docs.gotohuman.com)",
       "WebFetch(domain:github.com)",
       "Bash(npx create-next-app:*)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(npx tsc:*)",
+      "Bash(curl:*)",
+      "WebFetch(domain:api.scrapybara.com)",
+      "Bash(npm install:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:sdk.vercel.ai)",
+      "Bash(find:*)",
+      "WebSearch",
+      "Read(//c/Users/GonzaloAlvarezdeTole/Pictures/Screenshots/**)",
+      "WebFetch(domain:supabase.com)"
     ],
     "deny": [],
     "ask": []

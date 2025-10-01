@@ -438,12 +438,6 @@ export default function ChatPanel({
             <span className="text-sm">Waiting for human approval...</span>
           </div>
         )}
-        {isLoading && (
-          <div className="mt-2 flex items-center gap-2 text-blue-600 bg-blue-50 p-2 rounded">
-            <div className="animate-spin w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full"></div>
-            <span className="text-sm">AI Agent is working...</span>
-          </div>
-        )}
       </div>
 
       {/* Messages */}

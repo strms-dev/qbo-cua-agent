@@ -42,22 +42,10 @@ export async function GET(
         console.error('⚠️ Database update failed:', dbError);
       }
 
-      // Get latest screenshot if session is active/running
-      let screenshot = null;
-      if (sessionData.status === 'running' || sessionData.status === 'active') {
-        try {
-          const screenshotData = await scrapybaraClient.takeScreenshot(sessionId);
-          screenshot = screenshotData.screenshot;
-          console.log('📸 Screenshot captured');
-        } catch (error) {
-          console.error('⚠️ Failed to get screenshot:', error);
-        }
-      }
-
       return Response.json({
         status: mappedStatus,
         browserUrl: sessionData.browser_url,
-        screenshot,
+        screenshot: null,
       });
 
     } catch (scrapybaraError: any) {

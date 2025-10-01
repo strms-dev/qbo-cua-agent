@@ -368,35 +368,6 @@ async function samplingLoopWithStreaming(
             console.error('⚠️ Failed to save assistant message:', saveError);
           } else {
             console.log('✅ Assistant message saved to DB:', savedMessage?.id);
-
-            // Save screenshots to database if any
-            for (const toolCall of assistantMessage.toolCalls) {
-              if (toolCall.result?.screenshot_url && savedMessage?.id) {
-                try {
-                  const { error: screenshotError } = await supabase
-                    .from('screenshots')
-                    .insert({
-                      session_id: sessionId,
-                      message_id: savedMessage.id,
-                      base64_data: toolCall.result.screenshot || '',
-                      mime_type: 'image/png',
-                      metadata: {
-                        storage_url: toolCall.result.screenshot_url,
-                        action: toolCall.args.action,
-                        timestamp: new Date().toISOString()
-                      }
-                    });
-
-                  if (screenshotError) {
-                    console.error('⚠️ Failed to save screenshot metadata:', screenshotError);
-                  } else {
-                    console.log('✅ Screenshot metadata saved for message:', savedMessage.id);
-                  }
-                } catch (error) {
-                  console.error('⚠️ Error saving screenshot:', error);
-                }
-              }
-            }
           }
         } catch (error) {
           console.error('⚠️ Error in database save:', error);
