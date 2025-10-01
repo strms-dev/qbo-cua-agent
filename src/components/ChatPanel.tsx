@@ -300,15 +300,56 @@ export default function ChatPanel({
               )}
             </div>
             {toolCall.result && (
-              <div className="mt-2 text-xs">
-                <div className={`font-medium ${
-                  toolCall.result.success ? 'text-green-600' : 'text-red-600'
-                }`}>
-                  {toolCall.result.success ? '✅ Success' : '❌ Failed'}: {toolCall.result.description}
-                </div>
-                {toolCall.result.error && (
-                  <div className="text-red-600 mt-1">Error: {toolCall.result.error}</div>
+              <div className="mt-2">
+                {/* Show screenshot if available */}
+                {toolCall.args.action === 'screenshot' && toolCall.result.screenshot_url && (
+                  <div className="mb-2">
+                    <a
+                      href={toolCall.result.screenshot_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block cursor-pointer hover:opacity-80 transition-opacity"
+                    >
+                      <img
+                        src={toolCall.result.screenshot_url}
+                        alt="Screenshot"
+                        className="max-w-full h-auto rounded border border-gray-300 max-h-64 object-contain bg-gray-50"
+                      />
+                    </a>
+                    <div className="flex items-center gap-2 mt-2">
+                      <a
+                        href={toolCall.result.screenshot_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-blue-600 hover:underline flex items-center gap-1"
+                      >
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        Download Full Size
+                      </a>
+                      <span className="text-xs text-gray-500">•</span>
+                      <a
+                        href={toolCall.result.screenshot_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-blue-600 hover:underline"
+                      >
+                        Open in New Tab
+                      </a>
+                    </div>
+                  </div>
                 )}
+                <div className="text-xs">
+                  <div className={`font-medium ${
+                    toolCall.result.success ? 'text-green-600' : 'text-red-600'
+                  }`}>
+                    {toolCall.result.success ? '✅ Success' : '❌ Failed'}: {toolCall.result.description}
+                  </div>
+                  {toolCall.result.error && (
+                    <div className="text-red-600 mt-1">Error: {toolCall.result.error}</div>
+                  )}
+                </div>
               </div>
             )}
           </div>

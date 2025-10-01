@@ -79,13 +79,18 @@ async function uploadScreenshotToStorage(base64Image: string, sessionId: string)
       return null;
     }
 
-    // Get public URL
-    const { data: urlData } = supabase.storage
+    // Generate signed URL with 1 year expiration (31,536,000 seconds)
+    const { data: urlData, error: urlError } = await supabase.storage
       .from('cua-screenshots')
-      .getPublicUrl(filename);
+      .createSignedUrl(filename, 31536000);
 
-    console.log('✅ Screenshot uploaded:', urlData.publicUrl);
-    return urlData.publicUrl;
+    if (urlError || !urlData) {
+      console.error('❌ Failed to create signed URL:', urlError);
+      return null;
+    }
+
+    console.log('✅ Screenshot uploaded with signed URL:', urlData.signedUrl);
+    return urlData.signedUrl;
   } catch (error) {
     console.error('❌ Screenshot upload error:', error);
     return null;
@@ -110,7 +115,7 @@ async function executeComputerAction(toolInput: any, browserSessionId: string, s
         return {
           base64_image: screenshot.base64Image, // Keep for compatibility
           screenshot_url: screenshotUrl || undefined, // Add storage URL
-          output: screenshotUrl ? `Screenshot saved: ${screenshotUrl}` : 'Screenshot taken'
+          output: 'Screenshot saved'
         };
 
       case 'left_click':
