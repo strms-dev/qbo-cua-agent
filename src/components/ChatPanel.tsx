@@ -26,7 +26,15 @@ export default function ChatPanel({
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [expandedThinking, setExpandedThinking] = useState<Record<string, boolean>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const toggleThinking = (messageId: string) => {
+    setExpandedThinking(prev => ({
+      ...prev,
+      [messageId]: !prev[messageId]
+    }));
+  };
 
   // Load messages when session changes
   useEffect(() => {
@@ -55,6 +63,7 @@ export default function ChatPanel({
         id: msg.id,
         role: msg.role,
         content: msg.content,
+        thinking: msg.thinking || undefined,
         toolCalls: msg.tool_calls || []
       })) || [];
 
@@ -181,6 +190,7 @@ export default function ChatPanel({
                     id: data.message.id || (Date.now() + Math.random()).toString(),
                     role: data.message.role,
                     content: data.message.content,
+                    thinking: data.message.thinking || undefined,
                     toolCalls: data.message.toolCalls || []
                   };
                   console.log('💬 Adding message in real-time:', agentMessage.content.substring(0, 100));
@@ -545,6 +555,26 @@ export default function ChatPanel({
                     {formatToolCall(toolCall)}
                   </div>
                 ))}
+
+                {/* Reasoning (Thinking) - only show for assistant messages */}
+                {message.role === 'assistant' && (message as any).thinking && (
+                  <div className="mt-3 border-t border-gray-200 pt-3">
+                    <button
+                      onClick={() => toggleThinking(message.id)}
+                      className="text-sm font-medium text-gray-700 hover:text-gray-900 flex items-center gap-1 transition-colors"
+                    >
+                      <span className="text-gray-500">
+                        {expandedThinking[message.id] ? '▼' : '▶'}
+                      </span>
+                      Reasoning
+                    </button>
+                    {expandedThinking[message.id] && (
+                      <div className="mt-2 p-3 bg-white rounded border border-gray-300 text-sm text-gray-700 whitespace-pre-wrap">
+                        {(message as any).thinking}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </div>

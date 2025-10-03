@@ -10,6 +10,8 @@ export interface Message {
   session_id: string;
   role: 'user' | 'assistant' | 'tool';
   content: string;
+  thinking?: string;
+  thinking_signature?: string;
   tool_calls?: ToolCall[];
   created_at: string;
 }

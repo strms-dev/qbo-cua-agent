@@ -330,13 +330,23 @@ async function samplingLoopWithStreaming(
       const responseText = textBlocks.map(block => block.text).join('\n');
       finalResponse = responseText;
 
+      // Extract thinking blocks
+      const thinkingBlocks = response.content.filter((block: any) => block.type === 'thinking');
+      const thinking = thinkingBlocks.length > 0 ? thinkingBlocks[0].thinking : null;
+      const thinkingSignature = thinkingBlocks.length > 0 ? thinkingBlocks[0].signature : null;
+
       console.log('📝 Claude response:', responseText);
+      if (thinking) {
+        console.log('🧠 Thinking extracted:', thinking.substring(0, 100) + '...');
+      }
 
       // Create assistant message for conversation history
       const assistantMessage: {
         id: string;
         role: string;
         content: string;
+        thinking?: string;
+        thinking_signature?: string;
         toolCalls: Array<{
           toolCallId: string;
           toolName: string;
@@ -353,6 +363,8 @@ async function samplingLoopWithStreaming(
         id: `agent-${Date.now()}-${iteration}`,
         role: "assistant",
         content: responseText,
+        thinking: thinking || undefined,
+        thinking_signature: thinkingSignature || undefined,
         toolCalls: []
       };
 
@@ -405,6 +417,8 @@ async function samplingLoopWithStreaming(
               session_id: sessionId,
               role: 'assistant',
               content: responseText,
+              thinking: thinking || null,
+              thinking_signature: thinkingSignature || null,
               tool_calls: assistantMessage.toolCalls.length > 0 ? assistantMessage.toolCalls : null,
               anthropic_request: sanitizedRequest,
               anthropic_response: sanitizedResponse,
@@ -514,13 +528,26 @@ export async function POST(req: Request) {
     }
 
     // Handle agent requests (navigation, QBO tasks, etc.)
-    const isAgentTask = userMessage.toLowerCase().includes('navigate') ||
-                       userMessage.toLowerCase().includes('quickbooks') ||
-                       userMessage.toLowerCase().includes('qbo') ||
-                       userMessage.toLowerCase().includes('invoice') ||
-                       userMessage.toLowerCase().includes('transaction') ||
-                       userMessage.toLowerCase().includes('login') ||
-                       continueAgent;
+    const hasActiveBrowserSession = currentBrowserSessionId &&
+                                   !currentBrowserSessionId.startsWith('test-') &&
+                                   !currentBrowserSessionId.startsWith('demo-') &&
+                                   !currentBrowserSessionId.startsWith('fallback-');
+
+    const hasUrlPattern = /https?:\/\/|www\.|\.com|\.ar|\.org|\.net/i.test(userMessage);
+
+    const hasActionVerb = userMessage.toLowerCase().includes('navigate') ||
+                         userMessage.toLowerCase().includes('go to') ||
+                         userMessage.toLowerCase().includes('open') ||
+                         userMessage.toLowerCase().includes('click') ||
+                         userMessage.toLowerCase().includes('type') ||
+                         userMessage.toLowerCase().includes('scroll') ||
+                         userMessage.toLowerCase().includes('quickbooks') ||
+                         userMessage.toLowerCase().includes('qbo') ||
+                         userMessage.toLowerCase().includes('invoice') ||
+                         userMessage.toLowerCase().includes('transaction') ||
+                         userMessage.toLowerCase().includes('login');
+
+    const isAgentTask = hasActiveBrowserSession || hasUrlPattern || hasActionVerb || continueAgent;
 
     if (isAgentTask) {
       console.log('🤖 Agent task detected or continuation requested');

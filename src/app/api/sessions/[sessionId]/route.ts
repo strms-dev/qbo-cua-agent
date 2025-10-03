@@ -23,6 +23,8 @@ export async function GET(
           id,
           role,
           content,
+          thinking,
+          thinking_signature,
           tool_calls,
           created_at,
           metadata

@@ -13,8 +13,10 @@ export class ScrapybaraClient {
   async createSession() {
     console.log('🔄 Creating new browser session with official SDK...');
     try {
+      const timeoutHours = parseFloat(process.env.SCRAPYBARA_TIMEOUT_HOURS || '0.01');
       const browserInstance = await this.sdk.startBrowser({
         resolution: [1280, 800], // Match Anthropic computer tool dimensions
+        timeout_hours: timeoutHours,
       });
 
       const sessionId = browserInstance.id;

@@ -17,6 +17,8 @@ CREATE TABLE messages (
   session_id UUID REFERENCES chat_sessions(id) ON DELETE CASCADE,
   role TEXT CHECK (role IN ('user', 'assistant', 'tool')) NOT NULL,
   content TEXT NOT NULL,
+  thinking TEXT, -- Claude's reasoning/thinking process
+  thinking_signature TEXT, -- Signature for thinking verification
   tool_calls JSONB,
   anthropic_request JSONB, -- Sanitized Anthropic API request (base64 stripped)
   anthropic_response JSONB, -- Sanitized Anthropic API response (base64 stripped)
