@@ -11,8 +11,8 @@ const anthropic = new Anthropic({
 const COMPUTER_TOOL = {
   type: "computer_20250124" as const,
   name: "computer" as const,
-  display_width_px: 1920,
-  display_height_px: 1080,
+  display_width_px: 1280,
+  display_height_px: 800,
   display_number: 1,
 };
 
@@ -22,6 +22,47 @@ interface ToolResult {
   error?: string;
   base64_image?: string;
   screenshot_url?: string; // URL from Supabase Storage
+}
+
+// Helper to sanitize API data by removing base64 images
+// Returns a deep copy without base64 image data to reduce storage
+function sanitizeApiData(obj: any): any {
+  if (obj === null || obj === undefined) return obj;
+
+  if (typeof obj === 'string') {
+    // If string looks like base64 data (very long and matches pattern), replace with marker
+    if (obj.length > 1000 && obj.match(/^[A-Za-z0-9+/=]+$/)) {
+      return '[BASE64_IMAGE_REMOVED]';
+    }
+    return obj;
+  }
+
+  if (Array.isArray(obj)) {
+    return obj.map(sanitizeApiData);
+  }
+
+  if (obj && typeof obj === 'object') {
+    const sanitized: any = {};
+    for (const [key, value] of Object.entries(obj)) {
+      // Remove base64_image, base64Image, or data fields that contain image data
+      if ((key === 'base64_image' || key === 'base64Image' || key === 'data') &&
+          typeof value === 'string' && value.length > 1000) {
+        sanitized[key] = '[BASE64_IMAGE_REMOVED]';
+      } else if (key === 'source' && typeof value === 'object' && (value as any).type === 'base64') {
+        // Handle Anthropic image source format
+        sanitized[key] = {
+          type: 'base64',
+          media_type: (value as any).media_type,
+          data: '[BASE64_IMAGE_REMOVED]'
+        };
+      } else {
+        sanitized[key] = sanitizeApiData(value);
+      }
+    }
+    return sanitized;
+  }
+
+  return obj;
 }
 
 // Helper to trim base64 from objects for logging (defined early)
@@ -133,9 +174,7 @@ async function executeComputerAction(toolInput: any, browserSessionId: string, s
           throw new Error('right_click requires coordinate [x, y]');
         }
         console.log(`👆 Right clicking at (${coordinate[0]}, ${coordinate[1]})`);
-        // Simulate right-click (Scrapybara limitation)
-        await scrapybaraClient.click(browserSessionId, coordinate[0], coordinate[1]);
-        await scrapybaraClient.keyPress(browserSessionId, 'Menu');
+        await scrapybaraClient.rightClick(browserSessionId, coordinate[0], coordinate[1]);
         return {
           output: `Right clicked at coordinates (${coordinate[0]}, ${coordinate[1]})`
         };
@@ -145,9 +184,7 @@ async function executeComputerAction(toolInput: any, browserSessionId: string, s
           throw new Error('double_click requires coordinate [x, y]');
         }
         console.log(`👆 Double clicking at (${coordinate[0]}, ${coordinate[1]})`);
-        await scrapybaraClient.click(browserSessionId, coordinate[0], coordinate[1]);
-        await new Promise(resolve => setTimeout(resolve, 100));
-        await scrapybaraClient.click(browserSessionId, coordinate[0], coordinate[1]);
+        await scrapybaraClient.doubleClick(browserSessionId, coordinate[0], coordinate[1]);
         return {
           output: `Double clicked at coordinates (${coordinate[0]}, ${coordinate[1]})`
         };
@@ -256,18 +293,37 @@ async function samplingLoopWithStreaming(
     console.log(`🔄 Sampling Loop Iteration ${iteration + 1}/${maxIterations}`);
 
     try {
-      // Call Anthropic API
-      console.log('🧠 Calling Anthropic API...');
-      const response = await anthropic.beta.messages.create({
+      // Build API request
+      const apiRequest = {
         model: "claude-sonnet-4-20250514",
-        max_tokens: 1024,
+        max_tokens: 4096,
+        thinking: {
+          type: "enabled",
+          budget_tokens: 1024
+        },
         system: systemPrompt,
         messages: currentMessages,
         tools: [COMPUTER_TOOL],
         betas: ["computer-use-2025-01-24"]
-      });
+      };
+
+      // Call Anthropic API
+      console.log('🧠 Calling Anthropic API...');
+      const response = await anthropic.beta.messages.create(apiRequest);
 
       console.log('🎯 Response stop_reason:', response.stop_reason);
+
+      // Sanitize request and response for storage (remove base64 images)
+      const sanitizedRequest = sanitizeApiData(apiRequest);
+      const sanitizedResponse = sanitizeApiData({
+        id: response.id,
+        model: response.model,
+        role: response.role,
+        content: response.content,
+        stop_reason: response.stop_reason,
+        stop_sequence: response.stop_sequence,
+        usage: response.usage
+      });
 
       // Extract text content
       const textBlocks = response.content.filter(block => block.type === 'text');
@@ -309,20 +365,6 @@ async function samplingLoopWithStreaming(
       // Check for tool use
       const toolUseBlocks = response.content.filter(block => block.type === 'tool_use');
 
-      if (toolUseBlocks.length === 0) {
-        console.log('✅ No tools requested - conversation complete');
-        conversationHistory.push(assistantMessage);
-
-        // Stream final message
-        streamCallback({
-          type: 'message',
-          message: assistantMessage
-        });
-        break;
-      }
-
-      console.log(`🛠️ Found ${toolUseBlocks.length} tool use blocks`);
-
       // Execute all tool calls and build tool call history
       const toolResults = [];
       for (const toolBlock of toolUseBlocks) {
@@ -354,7 +396,7 @@ async function samplingLoopWithStreaming(
       // Add assistant message with tool calls to history
       conversationHistory.push(assistantMessage);
 
-      // Save assistant message to database
+      // Save assistant message to database (moved before tool use check to capture final messages)
       if (!sessionId.startsWith('fallback-')) {
         try {
           const { data: savedMessage, error: saveError } = await supabase
@@ -364,6 +406,8 @@ async function samplingLoopWithStreaming(
               role: 'assistant',
               content: responseText,
               tool_calls: assistantMessage.toolCalls.length > 0 ? assistantMessage.toolCalls : null,
+              anthropic_request: sanitizedRequest,
+              anthropic_response: sanitizedResponse,
               metadata: { iteration: iteration + 1 }
             })
             .select()
@@ -378,6 +422,20 @@ async function samplingLoopWithStreaming(
           console.error('⚠️ Error in database save:', error);
         }
       }
+
+      // Check if conversation is complete (no tool use blocks)
+      if (toolUseBlocks.length === 0) {
+        console.log('✅ No tools requested - conversation complete');
+
+        // Stream final message
+        streamCallback({
+          type: 'message',
+          message: assistantMessage
+        });
+        break;
+      }
+
+      console.log(`🛠️ Found ${toolUseBlocks.length} tool use blocks`);
 
       // Stream this message with tool calls immediately
       streamCallback({
@@ -590,9 +648,7 @@ WORKFLOW:
 4. Take another screenshot to verify the result
 5. Continue until the task is complete
 
-Be methodical and careful. Always verify your actions worked before proceeding.
-
-CURRENT TASK: ${userMessage}`;
+Be methodical and careful. Always verify your actions worked before proceeding.`;
 
               // Build conversation messages
               const conversationMessages = [

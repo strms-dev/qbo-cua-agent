@@ -18,6 +18,8 @@ CREATE TABLE messages (
   role TEXT CHECK (role IN ('user', 'assistant', 'tool')) NOT NULL,
   content TEXT NOT NULL,
   tool_calls JSONB,
+  anthropic_request JSONB, -- Sanitized Anthropic API request (base64 stripped)
+  anthropic_response JSONB, -- Sanitized Anthropic API response (base64 stripped)
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   metadata JSONB DEFAULT '{}'::jsonb
 );
@@ -71,6 +73,8 @@ CREATE TABLE browser_sessions (
 -- Indexes for better performance
 CREATE INDEX idx_messages_session_id ON messages(session_id);
 CREATE INDEX idx_messages_created_at ON messages(created_at DESC);
+CREATE INDEX idx_messages_anthropic_request ON messages USING GIN (anthropic_request);
+CREATE INDEX idx_messages_anthropic_response ON messages USING GIN (anthropic_response);
 CREATE INDEX idx_computer_actions_session_id ON computer_actions(session_id);
 CREATE INDEX idx_computer_actions_created_at ON computer_actions(created_at DESC);
 CREATE INDEX idx_approval_requests_status ON approval_requests(status);

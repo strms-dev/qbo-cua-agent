@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Monitor, Play, Pause, Square, RefreshCw } from 'lucide-react';
+import { Monitor, Play, Pause, Square } from 'lucide-react';
 
 interface BrowserPanelProps {
   browserSessionId: string | null;
@@ -25,43 +25,27 @@ export default function BrowserPanel({ browserSessionId, chatSessionId, streamUr
     showIframe: streamUrl && sessionStatus === 'active'
   });
 
-  // Initial fetch when browserSessionId changes
+  // Initial fetch when browserSessionId changes with retry for stream URL
   useEffect(() => {
     if (browserSessionId) {
-      fetchSessionStatus();
+      fetchSessionStatusWithRetry();
     }
   }, [browserSessionId]);
 
-  // Polling interval management based on current state
-  useEffect(() => {
-    if (!browserSessionId) return;
+  const fetchSessionStatusWithRetry = async () => {
+    const data = await fetchSessionStatus();
 
-    // Define terminal states that should never be polled
-    const terminalStates = ['stopped', 'terminated', 'not_found'];
-
-    // Improved polling logic - only poll when necessary
-    const shouldPoll = (
-      // Don't poll if session is in a terminal state
-      !terminalStates.includes(sessionStatus) &&
-      (
-        // Poll if agent is actively working
-        agentActive ||
-        // Or if we don't have a live stream URL yet
-        !streamUrl ||
-        // Or if session status indicates it needs monitoring
-        sessionStatus === 'paused' ||
-        sessionStatus === 'error'
-      )
-    );
-
-    if (shouldPoll) {
-      const interval = setInterval(fetchSessionStatus, agentActive ? 5000 : 15000); // Poll more frequently during agent activity
-      return () => clearInterval(interval);
+    // If stream URL is not available after first fetch, retry once after 3 seconds
+    if (data && !data.browserUrl && data.status === 'active') {
+      console.log('🔄 Stream URL not available, retrying in 3 seconds...');
+      setTimeout(async () => {
+        await fetchSessionStatus();
+      }, 3000);
     }
-  }, [browserSessionId, streamUrl, sessionStatus, agentActive]);
+  };
 
   const fetchSessionStatus = async () => {
-    if (!browserSessionId) return;
+    if (!browserSessionId) return null;
 
     try {
       const response = await fetch(`/api/browser/${browserSessionId}/status`);
@@ -72,10 +56,12 @@ export default function BrowserPanel({ browserSessionId, chatSessionId, streamUr
         if (data.screenshot) {
           setLastScreenshot(data.screenshot);
         }
+        return data;
       }
     } catch (error) {
       console.error('Failed to fetch session status:', error);
     }
+    return null;
   };
 
   const handleSessionAction = async (action: 'pause' | 'resume' | 'stop') => {
@@ -97,25 +83,6 @@ export default function BrowserPanel({ browserSessionId, chatSessionId, streamUr
     }
   };
 
-  const takeScreenshot = async () => {
-    if (!browserSessionId) return;
-
-    setIsLoading(true);
-    try {
-      const response = await fetch(`/api/browser/${browserSessionId}/screenshot`, {
-        method: 'POST',
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setLastScreenshot(data.screenshot);
-      }
-    } catch (error) {
-      console.error('Failed to take screenshot:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
   if (!browserSessionId) {
     return (
@@ -153,32 +120,41 @@ export default function BrowserPanel({ browserSessionId, chatSessionId, streamUr
 
         {/* Browser Controls */}
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => handleSessionAction(sessionStatus === 'paused' ? 'resume' : 'pause')}
-            disabled={isLoading || sessionStatus === 'stopped'}
-            className="flex items-center gap-1 px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
-          >
-            {sessionStatus === 'paused' ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
-            {sessionStatus === 'paused' ? 'Resume' : 'Pause'}
-          </button>
+          {/* Pause Button - only show when active */}
+          {sessionStatus === 'active' && (
+            <button
+              onClick={() => handleSessionAction('pause')}
+              disabled={isLoading}
+              className="flex items-center gap-1 px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
+            >
+              <Pause className="w-4 h-4" />
+              Pause
+            </button>
+          )}
 
-          <button
-            onClick={() => handleSessionAction('stop')}
-            disabled={isLoading || sessionStatus === 'stopped'}
-            className="flex items-center gap-1 px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700 disabled:opacity-50"
-          >
-            <Square className="w-4 h-4" />
-            Stop
-          </button>
+          {/* Resume Button - only show when paused */}
+          {sessionStatus === 'paused' && (
+            <button
+              onClick={() => handleSessionAction('resume')}
+              disabled={isLoading}
+              className="flex items-center gap-1 px-3 py-1 bg-green-600 text-white rounded text-sm hover:bg-green-700 disabled:opacity-50"
+            >
+              <Play className="w-4 h-4" />
+              Resume
+            </button>
+          )}
 
-          <button
-            onClick={takeScreenshot}
-            disabled={isLoading || sessionStatus !== 'active'}
-            className="flex items-center gap-1 px-3 py-1 bg-green-600 text-white rounded text-sm hover:bg-green-700 disabled:opacity-50"
-          >
-            <RefreshCw className="w-4 h-4" />
-            Screenshot
-          </button>
+          {/* Stop Button - only show when not stopped */}
+          {sessionStatus !== 'stopped' && sessionStatus !== 'terminated' && sessionStatus !== 'not_found' && (
+            <button
+              onClick={() => handleSessionAction('stop')}
+              disabled={isLoading}
+              className="flex items-center gap-1 px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700 disabled:opacity-50"
+            >
+              <Square className="w-4 h-4" />
+              Stop
+            </button>
+          )}
         </div>
 
         {/* Browser URL */}

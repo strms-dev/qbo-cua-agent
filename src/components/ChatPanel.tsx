@@ -272,6 +272,12 @@ export default function ChatPanel({
     return <Bot className="w-5 h-5 text-purple-600" />;
   };
 
+  const handleNewChat = () => {
+    onSessionChange(null);
+    onBrowserSessionChange(null);
+    onStreamUrlChange(null);
+  };
+
   const formatToolCall = (toolCall: any) => {
     switch (toolCall.toolName) {
       case 'computer_use':
@@ -469,10 +475,23 @@ export default function ChatPanel({
     <div className="h-full flex flex-col">
       {/* Header */}
       <div className="border-b border-gray-200 p-4 bg-white">
-        <h1 className="text-xl font-semibold text-gray-800">QBO AI Agent</h1>
-        <p className="text-sm text-gray-600">
-          AI-powered computer use agent for QuickBooks Online
-        </p>
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="text-xl font-semibold text-gray-800">QBO AI Agent</h1>
+            <p className="text-sm text-gray-600">
+              AI-powered computer use agent for QuickBooks Online
+            </p>
+          </div>
+          {/* New Chat button - only show when reviewing a thread */}
+          {sessionId && messages.length > 0 && !isLoading && (
+            <button
+              onClick={handleNewChat}
+              className="px-4 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50 rounded-lg transition-colors border border-blue-200 hover:border-blue-300"
+            >
+              New Chat
+            </button>
+          )}
+        </div>
         {isWaitingForApproval && (
           <div className="mt-2 flex items-center gap-2 text-yellow-600 bg-yellow-50 p-2 rounded">
             <AlertTriangle className="w-4 h-4" />

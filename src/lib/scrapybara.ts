@@ -14,13 +14,33 @@ export class ScrapybaraClient {
     console.log('🔄 Creating new browser session with official SDK...');
     try {
       const browserInstance = await this.sdk.startBrowser({
-        // Basic configuration without timeoutMinutes
+        resolution: [1280, 800], // Match Anthropic computer tool dimensions
       });
 
       const sessionId = browserInstance.id;
       this.activeSessions.set(sessionId, browserInstance);
 
       console.log('✅ Browser session created:', sessionId);
+
+      // Authenticate with saved QBO auth state if configured
+      const authStateId = process.env.SCRAPYBARA_AUTH_STATE_ID;
+      if (authStateId) {
+        try {
+          console.log('🔐 Authenticating with saved auth state:', authStateId);
+          await browserInstance.authenticate({
+            authStateId: authStateId
+          });
+          console.log('✅ Authentication successful - browser is now logged in');
+        } catch (authError: any) {
+          console.error('⚠️ Failed to authenticate with saved auth state:', authError?.message || authError);
+          console.error('💡 Make sure the auth state exists on your Scrapybara account');
+          console.error('💡 You can create it by logging in once and calling saveAuth()');
+          // Continue without authentication - user will need to login manually
+        }
+      } else {
+        console.log('ℹ️ No SCRAPYBARA_AUTH_STATE_ID configured - skipping authentication');
+      }
+
       return {
         sessionId: sessionId,
         id: sessionId,
@@ -36,26 +56,24 @@ export class ScrapybaraClient {
   async getSession(sessionId: string) {
     console.log('🔍 Getting session status:', sessionId);
     try {
-      // Try to get from our active sessions first
-      let browserInstance = this.activeSessions.get(sessionId);
+      // Always fetch fresh from SDK to get current status (no stale cache)
+      const instance = await this.sdk.get(sessionId);
 
-      if (!browserInstance) {
-        // If not in our cache, fetch from SDK
-        const instance = await this.sdk.get(sessionId);
-        if (instance instanceof Object && 'id' in instance) {
-          browserInstance = instance as BrowserInstance;
-          this.activeSessions.set(sessionId, browserInstance);
-        } else {
-          throw new Error('Session not found or invalid type');
-        }
+      if (instance instanceof Object && 'id' in instance) {
+        const browserInstance = instance as BrowserInstance;
+
+        // Update cache with fresh instance
+        this.activeSessions.set(sessionId, browserInstance);
+
+        return {
+          status: browserInstance.status,
+          browser_url: await this.getStreamUrl(browserInstance),
+          id: browserInstance.id,
+          launchTime: browserInstance.launchTime,
+        };
+      } else {
+        throw new Error('Session not found or invalid type');
       }
-
-      return {
-        status: browserInstance.status,
-        browser_url: await this.getStreamUrl(browserInstance),
-        id: browserInstance.id,
-        launchTime: browserInstance.launchTime,
-      };
     } catch (error) {
       console.error('❌ Failed to get session:', error);
       throw error;
@@ -107,8 +125,23 @@ export class ScrapybaraClient {
         case 'click':
           computerRequest = {
             action: 'click_mouse' as const,
-            coordinate: action.coordinate,
+            coordinates: action.coordinate, // Scrapybara uses 'coordinates' (plural)
             button: 'left', // Required parameter for click actions
+          };
+          break;
+        case 'double_click':
+          computerRequest = {
+            action: 'click_mouse' as const,
+            coordinates: action.coordinate,
+            button: 'left',
+            num_clicks: 2, // Use Scrapybara's built-in double-click
+          };
+          break;
+        case 'right_click':
+          computerRequest = {
+            action: 'click_mouse' as const,
+            coordinates: action.coordinate,
+            button: 'right', // Use Scrapybara's built-in right-click
           };
           break;
         case 'type':
@@ -120,7 +153,7 @@ export class ScrapybaraClient {
         case 'scroll':
           computerRequest = {
             action: 'scroll' as const,
-            coordinate: action.coordinate,
+            coordinates: action.coordinate, // Scrapybara uses 'coordinates' (plural)
           };
           break;
         case 'key':
@@ -159,6 +192,20 @@ export class ScrapybaraClient {
   async click(sessionId: string, x: number, y: number) {
     return this.performAction(sessionId, {
       action: 'click',
+      coordinate: [x, y],
+    });
+  }
+
+  async doubleClick(sessionId: string, x: number, y: number) {
+    return this.performAction(sessionId, {
+      action: 'double_click',
+      coordinate: [x, y],
+    });
+  }
+
+  async rightClick(sessionId: string, x: number, y: number) {
+    return this.performAction(sessionId, {
+      action: 'right_click',
       coordinate: [x, y],
     });
   }
@@ -253,28 +300,72 @@ export class ScrapybaraClient {
 
   async pauseSession(sessionId: string) {
     console.log('⏸️ Pausing session:', sessionId);
-    // Note: SDK doesn't seem to have pause/resume methods
-    // This might need to be implemented differently
-    return { status: 'paused', message: 'Pause not implemented in SDK' };
+    try {
+      const browserInstance = this.activeSessions.get(sessionId);
+      if (!browserInstance) {
+        throw new Error(`Session ${sessionId} not found`);
+      }
+
+      const result = await browserInstance.pause();
+      console.log('✅ Session paused:', result);
+      return result;
+    } catch (error) {
+      console.error('❌ Failed to pause session:', error);
+      throw error;
+    }
   }
 
   async resumeSession(sessionId: string) {
     console.log('▶️ Resuming session:', sessionId);
-    // Note: SDK doesn't seem to have pause/resume methods
-    return { status: 'active', message: 'Resume not implemented in SDK' };
+    try {
+      const browserInstance = this.activeSessions.get(sessionId);
+      if (!browserInstance) {
+        throw new Error(`Session ${sessionId} not found`);
+      }
+
+      const result = await browserInstance.resume();
+      console.log('✅ Session resumed:', result);
+      return result;
+    } catch (error) {
+      console.error('❌ Failed to resume session:', error);
+      throw error;
+    }
+  }
+
+  async saveAuthState(sessionId: string, name: string = 'default') {
+    console.log('💾 Saving auth state for session:', sessionId, 'with name:', name);
+    try {
+      const browserInstance = this.activeSessions.get(sessionId);
+      if (!browserInstance) {
+        throw new Error(`Session ${sessionId} not found`);
+      }
+
+      const authState = await browserInstance.saveAuth({ name });
+      console.log('✅ Auth state saved:', authState.authStateId);
+      return authState;
+    } catch (error) {
+      console.error('❌ Failed to save auth state:', error);
+      throw error;
+    }
   }
 
   async destroySession(sessionId: string) {
     console.log('🗑️ Destroying session:', sessionId);
     try {
       const browserInstance = this.activeSessions.get(sessionId);
-      if (browserInstance) {
-        // The SDK likely has a destroy method, but it's not in the types we saw
-        // For now, just remove from our cache
-        this.activeSessions.delete(sessionId);
-        return { status: 'destroyed' };
+      if (!browserInstance) {
+        console.log('⚠️ Session not found in cache, may already be stopped');
+        return { status: 'not_found' };
       }
-      return { status: 'not_found' };
+
+      // Call the SDK stop method
+      const result = await browserInstance.stop();
+      console.log('✅ Session stopped via SDK:', result);
+
+      // Remove from our cache
+      this.activeSessions.delete(sessionId);
+
+      return { status: 'destroyed', ...result };
     } catch (error) {
       console.error('❌ Failed to destroy session:', error);
       throw error;
