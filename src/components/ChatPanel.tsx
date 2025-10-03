@@ -6,9 +6,9 @@ import { Send, Bot, User, Camera, AlertTriangle, CheckCircle, XCircle } from 'lu
 
 interface ChatPanelProps {
   sessionId: string | null;
-  onSessionChange: (id: string) => void;
+  onSessionChange: (id: string | null) => void;
   browserSessionId: string | null;
-  onBrowserSessionChange: (id: string) => void;
+  onBrowserSessionChange: (id: string | null) => void;
   onStreamUrlChange: (url: string | null) => void;
   onAgentActiveChange: (active: boolean) => void;
 }

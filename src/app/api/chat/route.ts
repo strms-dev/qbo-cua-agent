@@ -298,7 +298,7 @@ async function samplingLoopWithStreaming(
         model: "claude-sonnet-4-20250514",
         max_tokens: 4096,
         thinking: {
-          type: "enabled",
+          type: "enabled" as const,
           budget_tokens: 1024
         },
         system: systemPrompt,
@@ -331,7 +331,7 @@ async function samplingLoopWithStreaming(
       finalResponse = responseText;
 
       // Extract thinking blocks
-      const thinkingBlocks = response.content.filter((block: any) => block.type === 'thinking');
+      const thinkingBlocks = response.content.filter((block: any) => block.type === 'thinking') as any[];
       const thinking = thinkingBlocks.length > 0 ? thinkingBlocks[0].thinking : null;
       const thinkingSignature = thinkingBlocks.length > 0 ? thinkingBlocks[0].signature : null;
 

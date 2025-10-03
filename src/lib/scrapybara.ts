@@ -16,7 +16,7 @@ export class ScrapybaraClient {
       const timeoutHours = parseFloat(process.env.SCRAPYBARA_TIMEOUT_HOURS || '0.01');
       const browserInstance = await this.sdk.startBrowser({
         resolution: [1280, 800], // Match Anthropic computer tool dimensions
-        timeout_hours: timeoutHours,
+        timeoutHours: timeoutHours,
       });
 
       const sessionId = browserInstance.id;
@@ -367,7 +367,7 @@ export class ScrapybaraClient {
       // Remove from our cache
       this.activeSessions.delete(sessionId);
 
-      return { status: 'destroyed', ...result };
+      return { ...result, status: 'destroyed' };
     } catch (error) {
       console.error('❌ Failed to destroy session:', error);
       throw error;
