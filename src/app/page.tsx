@@ -1,5 +1,5 @@
-import QBOAgent from "@/components/QBOAgent";
+import STRMSAgent from "@/components/STRMSAgent";
 
 export default function Home() {
-  return <QBOAgent />;
+  return <STRMSAgent />;
 }

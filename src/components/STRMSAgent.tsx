@@ -5,7 +5,7 @@ import ChatPanel from './ChatPanel';
 import BrowserPanel from './BrowserPanel';
 import ThreadHistory from './ThreadHistory';
 
-export default function QBOAgent() {
+export default function STRMSAgent() {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [browserSessionId, setBrowserSessionId] = useState<string | null>(null);
   const [streamUrl, setStreamUrl] = useState<string | null>(null);

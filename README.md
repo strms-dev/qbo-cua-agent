@@ -1,6 +1,6 @@
-# QBO CUA Agent
+# STRMS AI Agent
 
-An AI-powered agent for performing bookkeeping tasks in QuickBooks Online using Anthropic's Computer Use API, with human-in-the-loop approval for critical actions.
+An AI-powered computer use agent for task automation using Anthropic's Computer Use API, with human-in-the-loop approval for critical actions.
 
 ## Features
 
@@ -10,7 +10,6 @@ An AI-powered agent for performing bookkeeping tasks in QuickBooks Online using 
 - ✋ **Human approval workflow** for critical actions (Save, Post, Delete, etc.)
 - 📊 **Audit trail** storing all actions, screenshots, and chat history
 - 🔄 **Session management** with pause/resume functionality
-- 🏦 **QBO-focused** designed specifically for bookkeeping tasks
 
 ## Architecture
 
@@ -88,7 +87,7 @@ NEXTAUTH_URL=http://localhost:3000
 
 #### GoToHuman API
 1. Sign up at [gotohuman.com](https://gotohuman.com)
-2. Create an approval form called "qbo-action-approval" with fields:
+2. Create an approval form called "action-approval" with fields:
    - `action_description` (text)
    - `screenshot` (image)
    - `risk_assessment` (textarea)
@@ -105,7 +104,7 @@ Open [http://localhost:3000](http://localhost:3000) to see the application.
 
 ## Usage
 
-1. **Start a conversation** - Type a bookkeeping request in the chat
+1. **Start a conversation** - Type your task request in the chat
 2. **Browser session creation** - A Scrapybara browser session is automatically created
 3. **AI actions** - Claude takes screenshots and performs actions based on your request
 4. **Risk assessment** - High-risk actions trigger AI vision analysis
@@ -114,10 +113,10 @@ Open [http://localhost:3000](http://localhost:3000) to see the application.
 
 ### Example Prompts
 
-- "Help me create a new invoice for customer ABC Corp"
-- "Navigate to the reconcile page and help me match transactions"
-- "Generate a profit & loss report for last month"
-- "Add a new expense transaction for $500 office supplies"
+- "Navigate to example.com and fill out the contact form"
+- "Help me research product pricing on competitor websites"
+- "Take screenshots of the checkout flow on this e-commerce site"
+- "Click through this multi-step form and extract the final confirmation"
 
 ## Safety Features
 
@@ -151,7 +150,7 @@ src/
 │   │   └── browser/        # Browser session management
 │   └── page.tsx           # Main application page
 ├── components/
-│   ├── QBOAgent.tsx       # Main app component
+│   ├── STRMSAgent.tsx     # Main app component
 │   ├── ChatPanel.tsx      # Left panel - chat interface
 │   └── BrowserPanel.tsx   # Right panel - browser view
 ├── lib/

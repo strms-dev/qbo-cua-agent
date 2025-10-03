@@ -1,4 +1,4 @@
-# QBO CUA Agent - Project Implementation Summary
+# STRMS AI Agent - Project Implementation Summary
 
 **Date Completed**: September 25, 2025
 **Status**: ✅ Successfully Implemented - Production Ready
@@ -6,7 +6,7 @@
 
 ## 🎯 Project Overview
 
-Built a complete AI-powered agent for QuickBooks Online bookkeeping tasks using Anthropic's Computer Use API with human-in-the-loop approval system. The application features a split-panel interface showing chat conversations on the left and live browser sessions on the right.
+Built a complete AI-powered computer use agent for task automation using Anthropic's Computer Use API with human-in-the-loop approval system. The application features a split-panel interface showing chat conversations on the left and live browser sessions on the right.
 
 ## 🏗️ Technical Architecture
 
@@ -37,7 +37,7 @@ src/
 │   │       └── screenshot/route.ts    # Manual screenshot capture
 │   └── page.tsx                       # Main app entry point
 ├── components/
-│   ├── QBOAgent.tsx                   # Main container with split panels
+│   ├── STRMSAgent.tsx                 # Main container with split panels
 │   ├── ChatPanel.tsx                  # Left panel - chat interface
 │   └── BrowserPanel.tsx               # Right panel - browser view
 ├── lib/
@@ -69,7 +69,7 @@ src/
 
 ### 3. Human-in-the-Loop Workflow
 - **GoToHuman Integration**: Pause execution for human review
-- **Form Template**: "qbo-action-approval" with screenshot, risk assessment
+- **Form Template**: "action-approval" with screenshot, risk assessment
 - **Status Tracking**: Pending/Approved/Denied with audit trail
 - **Session Resume**: Continue after approval received
 

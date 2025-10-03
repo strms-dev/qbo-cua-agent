@@ -487,9 +487,9 @@ export default function ChatPanel({
       <div className="border-b border-gray-200 p-4 bg-white">
         <div className="flex items-start justify-between">
           <div>
-            <h1 className="text-xl font-semibold text-gray-800">QBO AI Agent</h1>
+            <h1 className="text-xl font-semibold text-gray-800">STRMS AI Agent</h1>
             <p className="text-sm text-gray-600">
-              AI-powered computer use agent for QuickBooks Online
+              AI-powered computer use agent
             </p>
           </div>
           {/* New Chat button - only show when reviewing a thread */}
@@ -522,9 +522,9 @@ export default function ChatPanel({
         ) : messages.length === 0 ? (
           <div className="text-center text-gray-500 mt-8">
             <Bot className="w-12 h-12 mx-auto mb-4 text-gray-400" />
-            <p className="text-lg font-medium">Welcome to QBO AI Agent</p>
+            <p className="text-lg font-medium">Welcome to STRMS AI Agent</p>
             <p className="text-sm mt-2">
-              I can see your screen, navigate websites, and perform QuickBooks tasks autonomously.
+              I can navigate websites and perform tasks autonomously.
               <br />
               Just tell me what you need and I'll handle it step by step!
             </p>
@@ -603,7 +603,7 @@ export default function ChatPanel({
           <input
             value={input}
             onChange={handleInputChange}
-            placeholder="Tell me what you'd like me to do in QuickBooks Online..."
+            placeholder="Tell me what you'd like me to do..."
             className="flex-1 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             disabled={isLoading || isWaitingForApproval}
           />
