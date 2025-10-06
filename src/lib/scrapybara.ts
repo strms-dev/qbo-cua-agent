@@ -122,6 +122,7 @@ export class ScrapybaraClient {
 
       // Map our action types to SDK action types
       let computerRequest: any;
+      let requestOptions: any = undefined;
 
       switch (action.action.toLowerCase()) {
         case 'click':
@@ -155,8 +156,11 @@ export class ScrapybaraClient {
         case 'scroll':
           computerRequest = {
             action: 'scroll' as const,
-            coordinates: action.coordinate, // Scrapybara uses 'coordinates' (plural)
+            coordinates: action.coordinate, // Where to scroll at
+            deltaX: action.deltaX || 0,
+            deltaY: action.deltaY || 0,
           };
+          requestOptions = { timeoutInSeconds: 60 };
           break;
         case 'key':
           computerRequest = {
@@ -173,7 +177,7 @@ export class ScrapybaraClient {
           throw new Error(`Unsupported action: ${action.action}`);
       }
 
-      const computerResponse = await browserInstance.computer(computerRequest);
+      const computerResponse = await browserInstance.computer(computerRequest, requestOptions);
 
       // Truncate base64Image for logging
       const logResponse = computerResponse.base64Image
@@ -219,10 +223,12 @@ export class ScrapybaraClient {
     });
   }
 
-  async scroll(sessionId: string, direction: string, amount: number = 300) {
+  async scroll(sessionId: string, x: number, y: number, direction: string, amount: number = 300) {
     return this.performAction(sessionId, {
       action: 'scroll',
-      coordinate: direction === 'down' ? [0, amount] : [0, -amount],
+      coordinate: [x, y],
+      deltaX: 0,
+      deltaY: direction === 'down' ? amount : -amount,
     });
   }
 

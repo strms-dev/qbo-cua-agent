@@ -219,6 +219,19 @@ async function executeComputerAction(toolInput: any, browserSessionId: string, s
           output: `Moved mouse to (${coordinate[0]}, ${coordinate[1]})`
         };
 
+      case 'scroll':
+        if (!coordinate || !Array.isArray(coordinate) || coordinate.length !== 2) {
+          throw new Error('scroll requires coordinate [x, y]');
+        }
+        const scrollDirection = toolInput.scroll_direction || 'down';
+        const scrollAmount = toolInput.scroll_amount || 1;
+        const pixelAmount = scrollAmount * 100; // Convert scroll_amount to pixels
+        console.log(`📜 Scrolling ${scrollDirection} by ${scrollAmount} units (${pixelAmount}px) at (${coordinate[0]}, ${coordinate[1]})`);
+        await scrapybaraClient.scroll(browserSessionId, coordinate[0], coordinate[1], scrollDirection, pixelAmount);
+        return {
+          output: `Scrolled ${scrollDirection} by ${scrollAmount} units at (${coordinate[0]}, ${coordinate[1]})`
+        };
+
       case 'wait':
         const duration = toolInput.duration || 1000;
         console.log(`⏳ Waiting for ${duration}ms`);
@@ -283,7 +296,7 @@ async function samplingLoopWithStreaming(
   browserSessionId: string,
   sessionId: string,
   streamCallback: (event: any) => void,
-  maxIterations: number = 15
+  maxIterations: number = 35
 ): Promise<{finalResponse: string, conversationHistory: any[]}> {
   let currentMessages = [...messages];
   let finalResponse = '';
