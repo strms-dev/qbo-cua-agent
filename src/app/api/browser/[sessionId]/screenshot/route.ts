@@ -1,4 +1,4 @@
-import { scrapybaraClient } from '@/lib/scrapybara';
+import { onkernelClient } from '@/lib/onkernel';
 import { supabase } from '@/lib/supabase';
 
 export async function POST(
@@ -9,13 +9,13 @@ export async function POST(
     const { sessionId } = await params;
 
     // Take screenshot
-    const screenshotData = await scrapybaraClient.takeScreenshot(sessionId);
+    const screenshotData = await onkernelClient.takeScreenshot(sessionId);
 
     // Log the screenshot action in database
     const { data: browserSession } = await supabase
       .from('browser_sessions')
       .select('chat_session_id')
-      .eq('scrapybara_session_id', sessionId)
+      .eq('onkernel_session_id', sessionId)
       .single();
 
     if (browserSession) {

@@ -1,11 +1,27 @@
 import { supabase } from '@/lib/supabase';
-import { scrapybaraClient } from '@/lib/scrapybara';
+import { onkernelClient } from '@/lib/onkernel';
 import Anthropic from '@anthropic-ai/sdk';
 
 // Initialize direct Anthropic client
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
+
+// Configure sampling loop delay (default: 100ms)
+const SAMPLING_LOOP_DELAY_MS = parseInt(process.env.SAMPLING_LOOP_DELAY_MS || '100', 10);
+
+// Configure max base64 screenshots in context (default: 3)
+const MAX_BASE64_SCREENSHOTS = parseInt(process.env.MAX_BASE64_SCREENSHOTS || '3', 10);
+
+// Configure number of recent thinking blocks to keep (default: 1)
+const KEEP_RECENT_THINKING_BLOCKS = parseInt(process.env.KEEP_RECENT_THINKING_BLOCKS || '1', 10);
+
+// Configure Anthropic thinking budget in tokens (default: 1024)
+const THINKING_BUDGET_TOKENS = parseInt(process.env.THINKING_BUDGET_TOKENS || '1024', 10);
+
+// Configure whether to store full Anthropic payload (including base64 images) in database
+// WARNING: Setting this to 'yes' will significantly increase database storage usage
+const FULL_ANTHROPIC_PAYLOAD = (process.env.FULL_ANTHROPIC_PAYLOAD || 'no').toLowerCase() === 'yes';
 
 // Define computer tool (following Anthropic's official format)
 const COMPUTER_TOOL = {
@@ -148,7 +164,7 @@ async function executeComputerAction(toolInput: any, browserSessionId: string, s
     switch (action) {
       case 'screenshot':
         console.log('📸 Taking screenshot...');
-        const screenshot = await scrapybaraClient.takeScreenshot(browserSessionId);
+        const screenshot = await onkernelClient.takeScreenshot(browserSessionId);
 
         // Upload to Supabase Storage
         const screenshotUrl = await uploadScreenshotToStorage(screenshot.base64Image, sessionId);
@@ -164,7 +180,7 @@ async function executeComputerAction(toolInput: any, browserSessionId: string, s
           throw new Error('left_click requires coordinate [x, y]');
         }
         console.log(`👆 Left clicking at (${coordinate[0]}, ${coordinate[1]})`);
-        await scrapybaraClient.click(browserSessionId, coordinate[0], coordinate[1]);
+        await onkernelClient.click(browserSessionId, coordinate[0], coordinate[1]);
         return {
           output: `Left clicked at coordinates (${coordinate[0]}, ${coordinate[1]})`
         };
@@ -174,7 +190,7 @@ async function executeComputerAction(toolInput: any, browserSessionId: string, s
           throw new Error('right_click requires coordinate [x, y]');
         }
         console.log(`👆 Right clicking at (${coordinate[0]}, ${coordinate[1]})`);
-        await scrapybaraClient.rightClick(browserSessionId, coordinate[0], coordinate[1]);
+        await onkernelClient.rightClick(browserSessionId, coordinate[0], coordinate[1]);
         return {
           output: `Right clicked at coordinates (${coordinate[0]}, ${coordinate[1]})`
         };
@@ -184,7 +200,7 @@ async function executeComputerAction(toolInput: any, browserSessionId: string, s
           throw new Error('double_click requires coordinate [x, y]');
         }
         console.log(`👆 Double clicking at (${coordinate[0]}, ${coordinate[1]})`);
-        await scrapybaraClient.doubleClick(browserSessionId, coordinate[0], coordinate[1]);
+        await onkernelClient.doubleClick(browserSessionId, coordinate[0], coordinate[1]);
         return {
           output: `Double clicked at coordinates (${coordinate[0]}, ${coordinate[1]})`
         };
@@ -194,7 +210,7 @@ async function executeComputerAction(toolInput: any, browserSessionId: string, s
           throw new Error('type requires text parameter');
         }
         console.log(`⌨️ Typing: "${text}"`);
-        await scrapybaraClient.type(browserSessionId, text);
+        await onkernelClient.type(browserSessionId, text);
         return {
           output: `Typed: "${text}"`
         };
@@ -204,7 +220,7 @@ async function executeComputerAction(toolInput: any, browserSessionId: string, s
           throw new Error('key requires text parameter');
         }
         console.log(`🔤 Pressing key: ${text}`);
-        await scrapybaraClient.keyPress(browserSessionId, text);
+        await onkernelClient.keyPress(browserSessionId, text);
         return {
           output: `Pressed key: ${text}`
         };
@@ -214,7 +230,7 @@ async function executeComputerAction(toolInput: any, browserSessionId: string, s
           throw new Error('mouse_move requires coordinate [x, y]');
         }
         console.log(`🖱️ Moving mouse to (${coordinate[0]}, ${coordinate[1]})`);
-        await scrapybaraClient.moveMouse(browserSessionId, coordinate[0], coordinate[1]);
+        await onkernelClient.moveMouse(browserSessionId, coordinate[0], coordinate[1]);
         return {
           output: `Moved mouse to (${coordinate[0]}, ${coordinate[1]})`
         };
@@ -227,7 +243,7 @@ async function executeComputerAction(toolInput: any, browserSessionId: string, s
         const scrollAmount = toolInput.scroll_amount || 1;
         const pixelAmount = scrollAmount * 100; // Convert scroll_amount to pixels
         console.log(`📜 Scrolling ${scrollDirection} by ${scrollAmount} units (${pixelAmount}px) at (${coordinate[0]}, ${coordinate[1]})`);
-        await scrapybaraClient.scroll(browserSessionId, coordinate[0], coordinate[1], scrollDirection, pixelAmount);
+        await onkernelClient.scroll(browserSessionId, coordinate[0], coordinate[1], scrollDirection, pixelAmount);
         return {
           output: `Scrolled ${scrollDirection} by ${scrollAmount} units at (${coordinate[0]}, ${coordinate[1]})`
         };
@@ -242,7 +258,7 @@ async function executeComputerAction(toolInput: any, browserSessionId: string, s
 
       case 'cursor_position':
         console.log(`📍 Getting cursor position`);
-        const position = await scrapybaraClient.getCursorPosition(browserSessionId);
+        const position = await onkernelClient.getCursorPosition(browserSessionId);
         return {
           output: `Cursor position retrieved: ${JSON.stringify(position)}`
         };
@@ -264,9 +280,16 @@ function makeToolResult(toolResult: ToolResult, toolUseId: string): any {
   const content = [];
 
   if (toolResult.output) {
+    let outputText = toolResult.output;
+
+    // Append screenshot URL if available
+    if (toolResult.screenshot_url) {
+      outputText += `\n[Screenshot URL: ${toolResult.screenshot_url}]`;
+    }
+
     content.push({
       type: "text",
-      text: toolResult.output
+      text: outputText
     });
   }
 
@@ -289,6 +312,130 @@ function makeToolResult(toolResult: ToolResult, toolUseId: string): any {
   };
 }
 
+/**
+ * Optimizes messages by replacing older screenshot base64 with URL references
+ * Keeps only the last N screenshots as base64 for visual context
+ */
+function optimizeScreenshotsInMessages(messages: any[], maxBase64Screenshots: number): any[] {
+  // Deep copy to avoid mutating original
+  const optimizedMessages = JSON.parse(JSON.stringify(messages));
+
+  // Find all tool_result blocks with screenshots (reverse order = newest first)
+  const screenshotBlocks: Array<{
+    messageIndex: number;
+    contentIndex: number;
+    url: string | null;
+  }> = [];
+
+  // Scan messages in reverse to find screenshots
+  for (let i = optimizedMessages.length - 1; i >= 0; i--) {
+    const msg = optimizedMessages[i];
+    if (msg.role === 'user' && Array.isArray(msg.content)) {
+      msg.content.forEach((item: any, contentIdx: number) => {
+        if (item.type === 'tool_result' && Array.isArray(item.content)) {
+          // Check if this tool result has an image
+          const hasImage = item.content.some((c: any) =>
+            c.type === 'image' && c.source?.type === 'base64'
+          );
+
+          if (hasImage) {
+            // Try to extract URL from text content
+            const textContent = item.content.find((c: any) => c.type === 'text');
+            let url: string | null = null;
+
+            // Look for Supabase URL pattern in output
+            if (textContent?.text) {
+              const urlMatch = textContent.text.match(/\[Screenshot URL: (https:\/\/[^\]]+)\]/);
+              url = urlMatch ? urlMatch[1] : null;
+            }
+
+            screenshotBlocks.push({
+              messageIndex: i,
+              contentIndex: contentIdx,
+              url
+            });
+          }
+        }
+      });
+    }
+  }
+
+  // Keep first N screenshots as base64, convert rest to URL
+  screenshotBlocks.forEach((block, idx) => {
+    if (idx >= maxBase64Screenshots) {
+      // Replace base64 with URL reference
+      const msg = optimizedMessages[block.messageIndex];
+      const toolResult = msg.content[block.contentIndex];
+
+      // Remove image from content
+      toolResult.content = toolResult.content.filter((c: any) => c.type !== 'image');
+
+      // URL should already be in the text from makeToolResult
+      // Just ensure the text indicates it's a URL reference
+      const textContent = toolResult.content.find((c: any) => c.type === 'text');
+      if (textContent && !textContent.text.includes('[Screenshot URL:')) {
+        if (block.url) {
+          textContent.text += `\n[Screenshot URL: ${block.url}]`;
+        }
+      }
+    }
+  });
+
+  return optimizedMessages;
+}
+
+/**
+ * Removes old thinking blocks from messages to reduce token usage
+ * Keeps only the last N thinking blocks for reasoning context
+ */
+function removeOldThinkingBlocks(messages: any[], keepRecentCount: number): any[] {
+  // Deep copy to avoid mutating original
+  const optimized = JSON.parse(JSON.stringify(messages));
+
+  // Find all assistant messages with thinking blocks
+  const assistantMessagesWithThinking: Array<{
+    messageIndex: number;
+    thinkingBlockIndices: number[];
+  }> = [];
+
+  // Scan messages to find assistant messages with thinking blocks
+  for (let i = 0; i < optimized.length; i++) {
+    const msg = optimized[i];
+    if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+      const thinkingIndices = msg.content
+        .map((item: any, idx: number) => item.type === 'thinking' ? idx : -1)
+        .filter((idx: number) => idx !== -1);
+
+      if (thinkingIndices.length > 0) {
+        assistantMessagesWithThinking.push({
+          messageIndex: i,
+          thinkingBlockIndices: thinkingIndices
+        });
+      }
+    }
+  }
+
+  // Calculate how many messages to keep thinking blocks for
+  const totalMessages = assistantMessagesWithThinking.length;
+  const messagesToStrip = totalMessages - keepRecentCount;
+
+  if (messagesToStrip > 0) {
+    // Remove thinking blocks from older messages (keep last N)
+    for (let i = 0; i < messagesToStrip; i++) {
+      const msgData = assistantMessagesWithThinking[i];
+      const msg = optimized[msgData.messageIndex];
+
+      // Remove thinking blocks in reverse order to maintain indices
+      for (let j = msgData.thinkingBlockIndices.length - 1; j >= 0; j--) {
+        const thinkingIdx = msgData.thinkingBlockIndices[j];
+        msg.content.splice(thinkingIdx, 1);
+      }
+    }
+  }
+
+  return optimized;
+}
+
 // Streaming sampling loop with real-time updates
 async function samplingLoopWithStreaming(
   systemPrompt: string,
@@ -302,33 +449,98 @@ async function samplingLoopWithStreaming(
   let finalResponse = '';
   let conversationHistory: any[] = [];
 
+  // Track conversation start time
+  const conversationStartTime = Date.now();
+
   for (let iteration = 0; iteration < maxIterations; iteration++) {
+    // Track iteration start time
+    const iterationStartTime = Date.now();
     console.log(`🔄 Sampling Loop Iteration ${iteration + 1}/${maxIterations}`);
 
     try {
+      // Optimize messages (keep only last N screenshots as base64)
+      const optimizedMessages = optimizeScreenshotsInMessages(currentMessages, MAX_BASE64_SCREENSHOTS);
+
+      // Count screenshots for logging
+      let totalScreenshots = 0;
+      currentMessages.forEach(msg => {
+        if (msg.role === 'user' && Array.isArray(msg.content)) {
+          msg.content.forEach((item: any) => {
+            if (item.type === 'tool_result' && Array.isArray(item.content)) {
+              const hasImage = item.content.some((c: any) => c.type === 'image');
+              if (hasImage) totalScreenshots++;
+            }
+          });
+        }
+      });
+
+      const optimizedCount = Math.max(0, totalScreenshots - MAX_BASE64_SCREENSHOTS);
+      if (optimizedCount > 0) {
+        console.log(`📊 Screenshot optimization: ${optimizedCount} screenshots converted to URLs (keeping ${MAX_BASE64_SCREENSHOTS} as base64)`);
+      }
+
+      // Remove old thinking blocks (keep only last N)
+      const finalMessages = removeOldThinkingBlocks(optimizedMessages, KEEP_RECENT_THINKING_BLOCKS);
+
+      // Count thinking blocks for logging
+      let totalThinkingBlocks = 0;
+      currentMessages.forEach(msg => {
+        if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+          msg.content.forEach((item: any) => {
+            if (item.type === 'thinking') totalThinkingBlocks++;
+          });
+        }
+      });
+
+      const thinkingBlocksRemoved = Math.max(0, totalThinkingBlocks - KEEP_RECENT_THINKING_BLOCKS);
+      if (thinkingBlocksRemoved > 0) {
+        console.log(`🧠 Thinking block optimization: ${thinkingBlocksRemoved} thinking blocks removed (keeping ${KEEP_RECENT_THINKING_BLOCKS} recent)`);
+      }
+
       // Build API request
       const apiRequest = {
         model: "claude-sonnet-4-20250514",
         max_tokens: 4096,
         thinking: {
           type: "enabled" as const,
-          budget_tokens: 1024
+          budget_tokens: THINKING_BUDGET_TOKENS
         },
         system: systemPrompt,
-        messages: currentMessages,
+        messages: finalMessages,
         tools: [COMPUTER_TOOL],
         betas: ["computer-use-2025-01-24"]
       };
 
+      // Log actual payload size BEFORE sending to Anthropic
+      const actualRequestPayload = JSON.stringify(apiRequest);
+      const actualRequestSizeBytes = actualRequestPayload.length;
+      const actualRequestSizeKB = (actualRequestSizeBytes / 1024).toFixed(2);
+      const actualRequestSizeMB = (actualRequestSizeBytes / (1024 * 1024)).toFixed(2);
+
+      // Count base64 images in the actual request
+      const base64ImageMatches = actualRequestPayload.match(/"data":"[A-Za-z0-9+/=]{1000,}"/g);
+      const base64ImageCount = base64ImageMatches ? base64ImageMatches.length : 0;
+      const base64TotalSize = base64ImageMatches
+        ? base64ImageMatches.reduce((sum, match) => sum + match.length, 0)
+        : 0;
+      const base64TotalSizeKB = (base64TotalSize / 1024).toFixed(2);
+
+      console.log(`📊 ACTUAL REQUEST PAYLOAD SIZE: ${actualRequestSizeBytes} bytes (${actualRequestSizeKB} KB / ${actualRequestSizeMB} MB)`);
+      console.log(`🖼️  Base64 images in request: ${base64ImageCount} images (${base64TotalSizeKB} KB total)`);
+      console.log(`📏 Request without images: ${((actualRequestSizeBytes - base64TotalSize) / 1024).toFixed(2)} KB`);
+
       // Call Anthropic API
       console.log('🧠 Calling Anthropic API...');
+      const apiStartTime = Date.now();
       const response = await anthropic.beta.messages.create(apiRequest);
+      const apiEndTime = Date.now();
+      const apiResponseTimeMs = apiEndTime - apiStartTime;
 
+      console.log(`⏱️  Anthropic API response time: ${apiResponseTimeMs}ms (${(apiResponseTimeMs / 1000).toFixed(2)}s)`);
       console.log('🎯 Response stop_reason:', response.stop_reason);
 
-      // Sanitize request and response for storage (remove base64 images)
-      const sanitizedRequest = sanitizeApiData(apiRequest);
-      const sanitizedResponse = sanitizeApiData({
+      // Prepare request and response for storage based on configuration
+      const responseData = {
         id: response.id,
         model: response.model,
         role: response.role,
@@ -336,7 +548,15 @@ async function samplingLoopWithStreaming(
         stop_reason: response.stop_reason,
         stop_sequence: response.stop_sequence,
         usage: response.usage
-      });
+      };
+
+      // Store either full payload (with base64 images) or sanitized payload based on env variable
+      const storedRequest = FULL_ANTHROPIC_PAYLOAD ? apiRequest : sanitizeApiData(apiRequest);
+      const storedResponse = FULL_ANTHROPIC_PAYLOAD ? responseData : sanitizeApiData(responseData);
+
+      if (FULL_ANTHROPIC_PAYLOAD) {
+        console.log('💾 Storing FULL payload (including base64 images) to database');
+      }
 
       // Extract text content
       const textBlocks = response.content.filter(block => block.type === 'text');
@@ -392,6 +612,7 @@ async function samplingLoopWithStreaming(
 
       // Execute all tool calls and build tool call history
       const toolResults = [];
+      const toolExecutionStartTime = Date.now();
       for (const toolBlock of toolUseBlocks) {
         if (toolBlock.type === 'tool_use' && toolBlock.name === 'computer') {
           console.log(`🔧 Executing tool: ${toolBlock.name} (${toolBlock.id})`, trimBase64ForLog(toolBlock.input));
@@ -418,13 +639,26 @@ async function samplingLoopWithStreaming(
         }
       }
 
+      // Calculate tool execution time
+      const toolExecutionEndTime = Date.now();
+      const toolExecutionTimeMs = toolExecutionEndTime - toolExecutionStartTime;
+
+      // Calculate total iteration time
+      const iterationEndTime = Date.now();
+      const iterationTotalTimeMs = iterationEndTime - iterationStartTime;
+
+      // Log timing metrics
+      console.log(`⏱️  Tool execution time: ${toolExecutionTimeMs}ms (${(toolExecutionTimeMs / 1000).toFixed(2)}s)`);
+      console.log(`⏱️  Iteration total time: ${iterationTotalTimeMs}ms (${(iterationTotalTimeMs / 1000).toFixed(2)}s)`);
+
       // Add assistant message with tool calls to history
       conversationHistory.push(assistantMessage);
 
-      // Save assistant message to database (moved before tool use check to capture final messages)
+      // Save assistant message to database with timing
+      let savedMessageId: string | null = null;
       if (!sessionId.startsWith('fallback-')) {
         try {
-          const { data: savedMessage, error: saveError } = await supabase
+          const { data: savedMessage, error: saveError} = await supabase
             .from('messages')
             .insert({
               session_id: sessionId,
@@ -433,8 +667,9 @@ async function samplingLoopWithStreaming(
               thinking: thinking || null,
               thinking_signature: thinkingSignature || null,
               tool_calls: assistantMessage.toolCalls.length > 0 ? assistantMessage.toolCalls : null,
-              anthropic_request: sanitizedRequest,
-              anthropic_response: sanitizedResponse,
+              anthropic_request: storedRequest,
+              anthropic_response: storedResponse,
+              anthropic_response_time_ms: apiResponseTimeMs,
               metadata: { iteration: iteration + 1 }
             })
             .select()
@@ -443,16 +678,66 @@ async function samplingLoopWithStreaming(
           if (saveError) {
             console.error('⚠️ Failed to save assistant message:', saveError);
           } else {
-            console.log('✅ Assistant message saved to DB:', savedMessage?.id);
+            savedMessageId = savedMessage?.id;
+            console.log('✅ Assistant message saved to DB:', savedMessageId);
           }
         } catch (error) {
           console.error('⚠️ Error in database save:', error);
+        }
+
+        // Save performance metrics to performance_metrics table
+        try {
+          await supabase
+            .from('performance_metrics')
+            .insert({
+              session_id: sessionId,
+              message_id: savedMessageId,
+              iteration: iteration + 1,
+              api_response_time_ms: apiResponseTimeMs,
+              iteration_total_time_ms: iterationTotalTimeMs,
+              tool_execution_time_ms: toolExecutionTimeMs,
+              metadata: {
+                tools_executed: toolResults.length,
+                screenshots_optimized: optimizedCount,
+                thinking_blocks_removed: thinkingBlocksRemoved,
+                actual_request_size_bytes: actualRequestSizeBytes,
+                actual_request_size_kb: parseFloat(actualRequestSizeKB),
+                base64_image_count: base64ImageCount,
+                base64_total_size_kb: parseFloat(base64TotalSizeKB)
+              }
+            });
+          console.log('✅ Performance metrics saved for iteration', iteration + 1);
+        } catch (error) {
+          console.error('⚠️ Failed to save performance metrics:', error);
         }
       }
 
       // Check if conversation is complete (no tool use blocks)
       if (toolUseBlocks.length === 0) {
+        // Calculate total conversation time
+        const totalConversationTimeMs = Date.now() - conversationStartTime;
         console.log('✅ No tools requested - conversation complete');
+        console.log(`⏱️  Total conversation time: ${totalConversationTimeMs}ms (${(totalConversationTimeMs / 1000).toFixed(2)}s)`);
+        console.log(`📊 Total iterations: ${iteration + 1}`);
+        console.log(`⏱️  Average time per iteration: ${(totalConversationTimeMs / (iteration + 1)).toFixed(0)}ms`);
+
+        // Update chat session with completion metrics
+        if (!sessionId.startsWith('fallback-')) {
+          try {
+            await supabase
+              .from('chat_sessions')
+              .update({
+                status: 'completed',
+                total_conversation_time_ms: totalConversationTimeMs,
+                completed_at: new Date().toISOString(),
+                total_iterations: iteration + 1
+              })
+              .eq('id', sessionId);
+            console.log('✅ Chat session updated with completion metrics');
+          } catch (error) {
+            console.error('⚠️ Failed to update chat session:', error);
+          }
+        }
 
         // Stream final message
         streamCallback({
@@ -479,8 +764,8 @@ async function samplingLoopWithStreaming(
         console.log(`📤 Added ${toolResults.length} tool results to conversation`);
       }
 
-      // Small delay between iterations
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Small delay between iterations to avoid overwhelming the API
+      await new Promise(resolve => setTimeout(resolve, SAMPLING_LOOP_DELAY_MS));
 
     } catch (error: unknown) {
       console.error('❌ Sampling loop error:', error);
@@ -568,9 +853,9 @@ export async function POST(req: Request) {
       // Ensure we have a browser session for agent tasks
       if (!currentBrowserSessionId || currentBrowserSessionId.startsWith('test-')) {
         try {
-          console.log('🔄 Creating new Scrapybara session for agent...');
-          const browserSession = await scrapybaraClient.createSession();
-          currentBrowserSessionId = browserSession.sessionId || browserSession.id || 'scrapybara-' + Date.now();
+          console.log('🔄 Creating new Onkernel session for agent...');
+          const browserSession = await onkernelClient.createSession();
+          currentBrowserSessionId = browserSession.sessionId || browserSession.id || 'onkernel-' + Date.now();
           console.log('✅ Created browser session:', currentBrowserSessionId);
 
           // Update chat session with browser session ID
@@ -581,7 +866,7 @@ export async function POST(req: Request) {
               .eq('id', currentSessionId);
           }
         } catch (error) {
-          console.error('❌ Failed to create Scrapybara session:', error);
+          console.error('❌ Failed to create Onkernel session:', error);
           currentBrowserSessionId = 'demo-browser-' + Date.now();
         }
       }
@@ -608,7 +893,7 @@ export async function POST(req: Request) {
           const { data: existingSession } = await supabase
             .from('browser_sessions')
             .select('id')
-            .eq('scrapybara_session_id', currentBrowserSessionId)
+            .eq('onkernel_session_id', currentBrowserSessionId)
             .single();
 
           if (!existingSession) {
@@ -616,7 +901,7 @@ export async function POST(req: Request) {
               .from('browser_sessions')
               .insert({
                 chat_session_id: currentSessionId,
-                scrapybara_session_id: currentBrowserSessionId,
+                onkernel_session_id: currentBrowserSessionId,
                 status: 'active',
                 last_activity_at: new Date().toISOString(),
               });
@@ -638,7 +923,7 @@ export async function POST(req: Request) {
       let streamUrl = null;
       if (!currentBrowserSessionId.startsWith('demo-') && !currentBrowserSessionId.startsWith('test-')) {
         try {
-          const sessionData = await scrapybaraClient.getSession(currentBrowserSessionId);
+          const sessionData = await onkernelClient.getSession(currentBrowserSessionId);
           streamUrl = sessionData.browser_url;
           console.log('🔗 Stream URL obtained before agent execution:', streamUrl);
         } catch (error) {
@@ -680,6 +965,13 @@ You have access to a computer tool that supports these actions:
 - double_click: Double-click at specific coordinates [x, y]
 - type: Type text into the currently focused field
 - key: Press keyboard keys (Enter, Tab, Escape, etc.)
+- mouse_move: Move cursor to coordinates
+- scroll: Scroll in any direction with amount control
+- left_click_drag: Click and drag between coordinates
+- left_mouse_down, left_mouse_up: Fine-grained click control
+- hold_key: Hold a key while performing other actions
+- wait: Pause between actions
+- double_click, triple_click: Multiple clicks
 
 WORKFLOW:
 1. Take a screenshot first to see what's currently on screen
@@ -706,13 +998,13 @@ Be methodical and careful. Always verify your actions worked before proceeding.`
               }
 
               // Execute sampling loop with streaming callback
+              // Using default maxIterations (35) from function signature
               const { finalResponse } = await samplingLoopWithStreaming(
                 systemPrompt,
                 conversationMessages,
                 currentBrowserSessionId,
                 currentSessionId,
-                sendEvent,
-                15
+                sendEvent
               );
 
               // Send completion event
@@ -746,7 +1038,7 @@ Be methodical and careful. Always verify your actions worked before proceeding.`
 
       // Demo mode response (non-streaming)
       if (currentBrowserSessionId.startsWith('demo-')) {
-        const responseContent = `🌐 I would help you with QuickBooks tasks, but I'm running in demo mode. In production, I would:\n\n1. ✅ Create a browser session\n2. 📸 Take screenshots to see current state\n3. 🤖 Use AI to analyze and decide actions\n4. 🎯 Execute precise computer actions\n\nThe Scrapybara integration needs API configuration to work fully.`;
+        const responseContent = `🌐 I would help you with QuickBooks tasks, but I'm running in demo mode. In production, I would:\n\n1. ✅ Create a browser session\n2. 📸 Take screenshots to see current state\n3. 🤖 Use AI to analyze and decide actions\n4. 🎯 Execute precise computer actions\n\nThe Onkernel integration needs API configuration to work fully.`;
 
         return Response.json({
           message: {
@@ -777,7 +1069,7 @@ Be methodical and careful. Always verify your actions worked before proceeding.`
       let streamUrl = null;
       if (currentBrowserSessionId && !currentBrowserSessionId.startsWith('demo-') && !currentBrowserSessionId.startsWith('test-')) {
         try {
-          const sessionData = await scrapybaraClient.getSession(currentBrowserSessionId);
+          const sessionData = await onkernelClient.getSession(currentBrowserSessionId);
           streamUrl = sessionData.browser_url;
           console.log('🔗 Stream URL obtained:', streamUrl);
         } catch (error) {
@@ -816,7 +1108,7 @@ What would you like me to help you with?`;
     let streamUrl = null;
     if (currentBrowserSessionId && !currentBrowserSessionId.startsWith('demo-') && !currentBrowserSessionId.startsWith('test-')) {
       try {
-        const sessionData = await scrapybaraClient.getSession(currentBrowserSessionId);
+        const sessionData = await onkernelClient.getSession(currentBrowserSessionId);
         streamUrl = sessionData.browser_url;
         console.log('🔗 Stream URL obtained:', streamUrl);
       } catch (error) {

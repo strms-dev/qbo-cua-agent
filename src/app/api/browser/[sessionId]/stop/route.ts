@@ -1,4 +1,4 @@
-import { scrapybaraClient } from '@/lib/scrapybara';
+import { onkernelClient } from '@/lib/onkernel';
 import { supabase } from '@/lib/supabase';
 
 export async function POST(
@@ -8,8 +8,8 @@ export async function POST(
   try {
     const { sessionId } = await params;
 
-    // Destroy session in Scrapybara
-    await scrapybaraClient.destroySession(sessionId);
+    // Destroy session in Onkernel
+    await onkernelClient.destroySession(sessionId);
 
     // Update our database
     await supabase
@@ -18,7 +18,7 @@ export async function POST(
         status: 'stopped',
         last_activity_at: new Date().toISOString(),
       })
-      .eq('scrapybara_session_id', sessionId);
+      .eq('onkernel_session_id', sessionId);
 
     return Response.json({ success: true });
   } catch (error) {

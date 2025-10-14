@@ -16,7 +16,19 @@
       "Bash(find:*)",
       "WebSearch",
       "Read(//c/Users/GonzaloAlvarezdeTole/Pictures/Screenshots/**)",
-      "WebFetch(domain:supabase.com)"
+      "WebFetch(domain:supabase.com)",
+      "WebFetch(domain:www.onkernel.com)",
+      "WebFetch(domain:playwright.dev)",
+      "Bash(npm run dev:*)",
+      "Bash(claude mcp add:*)",
+      "mcp__supabase__list_tables",
+      "mcp__supabase__execute_sql",
+      "WebFetch(domain:qbxiujvljytkgneysyww.supabase.co)",
+      "Read(//c/Users/GonzaloAlvarezdeTole/AppData/Local/Temp/**)",
+      "Bash(awk:*)",
+      "Bash(dir:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nMigrate from Scrapybara to OnKernel browser automation\n\nUpdated browser automation provider from Scrapybara to OnKernel, including API route changes, new migrations, and component updates.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\" --author \"Gonzalo Alvarez de Toledo <gonzalo@example.com>\")"
     ],
     "deny": [],
     "ask": []

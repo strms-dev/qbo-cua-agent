@@ -1,4 +1,4 @@
-import { scrapybaraClient } from '@/lib/scrapybara';
+import { onkernelClient } from '@/lib/onkernel';
 import { supabase } from '@/lib/supabase';
 
 export async function GET(
@@ -20,12 +20,12 @@ export async function GET(
       });
     }
 
-    // Try to get session from Scrapybara
+    // Try to get session from Onkernel
     try {
-      const sessionData = await scrapybaraClient.getSession(sessionId);
-      console.log('✅ Scrapybara session found:', sessionData.status);
+      const sessionData = await onkernelClient.getSession(sessionId);
+      console.log('✅ Onkernel session found:', sessionData.status);
 
-      // Map Scrapybara status to our expected status
+      // Map status to our expected status
       const mappedStatus = sessionData.status === 'running' ? 'active' : sessionData.status;
       console.log('🔄 Status mapped:', sessionData.status, '->', mappedStatus);
 
@@ -37,7 +37,7 @@ export async function GET(
             status: mappedStatus,
             last_activity_at: new Date().toISOString(),
           })
-          .eq('scrapybara_session_id', sessionId);
+          .eq('onkernel_session_id', sessionId);
       } catch (dbError) {
         console.error('⚠️ Database update failed:', dbError);
       }
@@ -48,20 +48,22 @@ export async function GET(
         screenshot: null,
       });
 
-    } catch (scrapybaraError: any) {
-      console.error('❌ Scrapybara session not found:', scrapybaraError.message);
-
-      // Session doesn't exist on Scrapybara
-      if (scrapybaraError.message?.includes('404')) {
+    } catch (onkernelError: any) {
+      // Session doesn't exist in local cache or on Onkernel
+      // This is expected when a session is stopped/destroyed
+      if (onkernelError.message?.includes('404') || onkernelError.message?.includes('not found')) {
+        console.log('ℹ️ Session not found (expected after stop):', sessionId);
         return Response.json({
-          status: 'not_found',
+          status: 'stopped',
           browserUrl: null,
           screenshot: null,
-          message: `Session ${sessionId} not found. Please start a new conversation to create a browser session.`
+          message: `Session ${sessionId} has been stopped. Start a new conversation to create a browser session.`
         });
       }
 
-      throw scrapybaraError;
+      // Unexpected error - log and throw
+      console.error('❌ Unexpected error getting session:', onkernelError.message);
+      throw onkernelError;
     }
 
   } catch (error: any) {

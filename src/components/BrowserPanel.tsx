@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Monitor, Play, Pause, Square } from 'lucide-react';
+import { Monitor, Square } from 'lucide-react';
 
 interface BrowserPanelProps {
   browserSessionId: string | null;
@@ -12,7 +12,7 @@ interface BrowserPanelProps {
 
 export default function BrowserPanel({ browserSessionId, chatSessionId, streamUrl, agentActive = false }: BrowserPanelProps) {
   const [browserUrl, setBrowserUrl] = useState<string>('');
-  const [sessionStatus, setSessionStatus] = useState<'active' | 'paused' | 'stopped' | 'terminated' | 'demo' | 'not_found' | 'error'>('stopped');
+  const [sessionStatus, setSessionStatus] = useState<'active' | 'stopped' | 'terminated' | 'demo' | 'not_found' | 'error'>('stopped');
   const [isLoading, setIsLoading] = useState(false);
   const [lastScreenshot, setLastScreenshot] = useState<string>('');
 
@@ -64,7 +64,7 @@ export default function BrowserPanel({ browserSessionId, chatSessionId, streamUr
     return null;
   };
 
-  const handleSessionAction = async (action: 'pause' | 'resume' | 'stop') => {
+  const handleSessionAction = async (action: 'stop') => {
     if (!browserSessionId) return;
 
     setIsLoading(true);
@@ -109,8 +109,6 @@ export default function BrowserPanel({ browserSessionId, chatSessionId, streamUr
               className={`w-2 h-2 rounded-full ${
                 sessionStatus === 'active'
                   ? 'bg-green-500'
-                  : sessionStatus === 'paused'
-                  ? 'bg-yellow-500'
                   : 'bg-gray-500'
               }`}
             />
@@ -120,39 +118,16 @@ export default function BrowserPanel({ browserSessionId, chatSessionId, streamUr
 
         {/* Browser Controls */}
         <div className="flex items-center gap-2">
-          {/* Pause Button - only show when active */}
+          {/* Stop Button - only show when active */}
+          {/* Note: Onkernel handles pause/resume automatically, so we only provide Stop */}
           {sessionStatus === 'active' && (
-            <button
-              onClick={() => handleSessionAction('pause')}
-              disabled={isLoading}
-              className="flex items-center gap-1 px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
-            >
-              <Pause className="w-4 h-4" />
-              Pause
-            </button>
-          )}
-
-          {/* Resume Button - only show when paused */}
-          {sessionStatus === 'paused' && (
-            <button
-              onClick={() => handleSessionAction('resume')}
-              disabled={isLoading}
-              className="flex items-center gap-1 px-3 py-1 bg-green-600 text-white rounded text-sm hover:bg-green-700 disabled:opacity-50"
-            >
-              <Play className="w-4 h-4" />
-              Resume
-            </button>
-          )}
-
-          {/* Stop Button - only show when not stopped */}
-          {sessionStatus !== 'stopped' && sessionStatus !== 'terminated' && sessionStatus !== 'not_found' && (
             <button
               onClick={() => handleSessionAction('stop')}
               disabled={isLoading}
               className="flex items-center gap-1 px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700 disabled:opacity-50"
             >
               <Square className="w-4 h-4" />
-              Stop
+              Stop Session
             </button>
           )}
         </div>
@@ -243,9 +218,7 @@ export default function BrowserPanel({ browserSessionId, chatSessionId, streamUr
             <div className="text-center">
               <Monitor className="w-12 h-12 mx-auto mb-4 text-gray-400" />
               <p className="text-gray-600">Browser session is {sessionStatus}</p>
-              {sessionStatus === 'paused' && (
-                <p className="text-sm text-gray-500 mt-2">Click Resume to continue</p>
-              )}
+              <p className="text-sm text-gray-500 mt-2">Start a new conversation to create a session</p>
             </div>
           </div>
         )}
