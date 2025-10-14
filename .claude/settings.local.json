@@ -16,7 +16,10 @@
       "Bash(find:*)",
       "WebSearch",
       "Read(//c/Users/GonzaloAlvarezdeTole/Pictures/Screenshots/**)",
-      "WebFetch(domain:supabase.com)"
+      "WebFetch(domain:supabase.com)",
+      "Bash(git merge:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []
