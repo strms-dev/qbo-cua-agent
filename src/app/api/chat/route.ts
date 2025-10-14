@@ -23,6 +23,50 @@ const THINKING_BUDGET_TOKENS = parseInt(process.env.THINKING_BUDGET_TOKENS || '1
 // WARNING: Setting this to 'yes' will significantly increase database storage usage
 const FULL_ANTHROPIC_PAYLOAD = (process.env.FULL_ANTHROPIC_PAYLOAD || 'no').toLowerCase() === 'yes';
 
+// Anthropic Model Configuration
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514';
+const ANTHROPIC_MAX_TOKENS = parseInt(process.env.ANTHROPIC_MAX_TOKENS || '4096', 10);
+const ANTHROPIC_THINKING_ENABLED = (process.env.ANTHROPIC_THINKING_ENABLED || 'yes').toLowerCase() === 'yes';
+const ANTHROPIC_BETAS = process.env.ANTHROPIC_BETAS || 'computer-use-2025-01-24';
+
+// Agent Loop Configuration
+const AGENT_MAX_ITERATIONS = parseInt(process.env.AGENT_MAX_ITERATIONS || '35', 10);
+
+// Parse betas from comma-separated string to array
+const parseBetas = (betasString: string): string[] => {
+  return betasString.split(',').map(beta => beta.trim()).filter(beta => beta.length > 0);
+};
+
+// Default system prompt for the agent
+const DEFAULT_SYSTEM_PROMPT = `You are an AI agent that can see and control a browser to help with QuickBooks Online tasks.
+
+You have access to a computer tool that supports these actions:
+- screenshot: Take a screenshot to see the current browser state
+- left_click: Click at specific coordinates [x, y]
+- right_click: Right-click at specific coordinates [x, y]
+- double_click: Double-click at specific coordinates [x, y]
+- type: Type text into the currently focused field
+- key: Press keyboard keys (Enter, Tab, Escape, etc.)
+- mouse_move: Move cursor to coordinates
+- scroll: Scroll in any direction with amount control
+- left_click_drag: Click and drag between coordinates
+- left_mouse_down, left_mouse_up: Fine-grained click control
+- hold_key: Hold a key while performing other actions
+- wait: Pause between actions
+- double_click, triple_click: Multiple clicks
+
+WORKFLOW:
+1. Take a screenshot first to see what's currently on screen
+2. Analyze what you see and determine what action to take next
+3. Execute the appropriate computer action
+4. Take another screenshot to verify the result
+5. Continue until the task is complete
+
+Be methodical and careful. Always verify your actions worked before proceeding.`;
+
+// Allow complete override of system prompt via environment variable
+const ANTHROPIC_SYSTEM_PROMPT = process.env.ANTHROPIC_SYSTEM_PROMPT || DEFAULT_SYSTEM_PROMPT;
+
 // Define computer tool (following Anthropic's official format)
 const COMPUTER_TOOL = {
   type: "computer_20250124" as const,
@@ -30,6 +74,52 @@ const COMPUTER_TOOL = {
   display_width_px: 1280,
   display_height_px: 800,
   display_number: 1,
+};
+
+// Define report_task_status tool for agent self-reporting
+const REPORT_TASK_STATUS_TOOL = {
+  name: "report_task_status",
+  description: `Use this tool to report task completion status to the system.
+
+Call this tool when:
+- ✅ A task is successfully completed (status: "completed")
+- ❌ A task has failed and cannot continue (status: "failed")
+- ⏸️ You need clarification from the user before proceeding (status: "needs_clarification")
+
+IMPORTANT: Always call this tool when you finish a task, encounter blocking issues, or need user input.`,
+  input_schema: {
+    type: "object",
+    properties: {
+      status: {
+        type: "string",
+        enum: ["completed", "failed", "needs_clarification"],
+        description: "Task completion status"
+      },
+      message: {
+        type: "string",
+        description: "Clear explanation of what happened and why you're reporting this status"
+      },
+      evidence: {
+        type: "object",
+        description: "Supporting evidence (optional)",
+        properties: {
+          screenshot_url: {
+            type: "string",
+            description: "URL of a relevant screenshot"
+          },
+          extracted_data: {
+            type: "object",
+            description: "Any data extracted during the task"
+          },
+          error_details: {
+            type: "string",
+            description: "Technical error details if task failed"
+          }
+        }
+      }
+    },
+    required: ["status", "message"]
+  }
 };
 
 // Interface for tool results (following Anthropic's demo)
@@ -443,7 +533,7 @@ async function samplingLoopWithStreaming(
   browserSessionId: string,
   sessionId: string,
   streamCallback: (event: any) => void,
-  maxIterations: number = 35
+  maxIterations: number = AGENT_MAX_ITERATIONS
 ): Promise<{finalResponse: string, conversationHistory: any[]}> {
   let currentMessages = [...messages];
   let finalResponse = '';
@@ -498,18 +588,22 @@ async function samplingLoopWithStreaming(
       }
 
       // Build API request
-      const apiRequest = {
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 4096,
-        thinking: {
-          type: "enabled" as const,
-          budget_tokens: THINKING_BUDGET_TOKENS
-        },
+      const apiRequest: any = {
+        model: ANTHROPIC_MODEL,
+        max_tokens: ANTHROPIC_MAX_TOKENS,
         system: systemPrompt,
         messages: finalMessages,
-        tools: [COMPUTER_TOOL],
-        betas: ["computer-use-2025-01-24"]
+        tools: [COMPUTER_TOOL, REPORT_TASK_STATUS_TOOL],
+        betas: parseBetas(ANTHROPIC_BETAS)
       };
+
+      // Conditionally add thinking if enabled
+      if (ANTHROPIC_THINKING_ENABLED) {
+        apiRequest.thinking = {
+          type: "enabled" as const,
+          budget_tokens: THINKING_BUDGET_TOKENS
+        };
+      }
 
       // Log actual payload size BEFORE sending to Anthropic
       const actualRequestPayload = JSON.stringify(apiRequest);
@@ -955,32 +1049,8 @@ export async function POST(req: Request) {
                 timestamp: new Date().toISOString()
               });
 
-              // Prepare system prompt
-              const systemPrompt = `You are an AI agent that can see and control a browser to help with QuickBooks Online tasks.
-
-You have access to a computer tool that supports these actions:
-- screenshot: Take a screenshot to see the current browser state
-- left_click: Click at specific coordinates [x, y]
-- right_click: Right-click at specific coordinates [x, y]
-- double_click: Double-click at specific coordinates [x, y]
-- type: Type text into the currently focused field
-- key: Press keyboard keys (Enter, Tab, Escape, etc.)
-- mouse_move: Move cursor to coordinates
-- scroll: Scroll in any direction with amount control
-- left_click_drag: Click and drag between coordinates
-- left_mouse_down, left_mouse_up: Fine-grained click control
-- hold_key: Hold a key while performing other actions
-- wait: Pause between actions
-- double_click, triple_click: Multiple clicks
-
-WORKFLOW:
-1. Take a screenshot first to see what's currently on screen
-2. Analyze what you see and determine what action to take next
-3. Execute the appropriate computer action
-4. Take another screenshot to verify the result
-5. Continue until the task is complete
-
-Be methodical and careful. Always verify your actions worked before proceeding.`;
+              // Use configured system prompt
+              const systemPrompt = ANTHROPIC_SYSTEM_PROMPT;
 
               // Build conversation messages
               const conversationMessages = [
