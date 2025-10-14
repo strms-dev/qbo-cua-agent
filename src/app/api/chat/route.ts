@@ -533,7 +533,9 @@ async function samplingLoopWithStreaming(
   browserSessionId: string,
   sessionId: string,
   streamCallback: (event: any) => void,
-  maxIterations: number = AGENT_MAX_ITERATIONS
+  maxIterations: number = AGENT_MAX_ITERATIONS,
+  taskId: string | null = null,
+  startIteration: number = 0
 ): Promise<{finalResponse: string, conversationHistory: any[]}> {
   let currentMessages = [...messages];
   let finalResponse = '';
@@ -542,10 +544,22 @@ async function samplingLoopWithStreaming(
   // Track conversation start time
   const conversationStartTime = Date.now();
 
-  for (let iteration = 0; iteration < maxIterations; iteration++) {
+  for (let iteration = startIteration; iteration < maxIterations; iteration++) {
     // Track iteration start time
     const iterationStartTime = Date.now();
     console.log(`🔄 Sampling Loop Iteration ${iteration + 1}/${maxIterations}`);
+
+    // Update task current_iteration in database
+    if (taskId && !sessionId.startsWith('fallback-')) {
+      try {
+        await supabase
+          .from('tasks')
+          .update({ current_iteration: iteration + 1 })
+          .eq('id', taskId);
+      } catch (error) {
+        console.error('⚠️ Failed to update task iteration:', error);
+      }
+    }
 
     try {
       // Optimize messages (keep only last N screenshots as base64)
@@ -707,6 +721,9 @@ async function samplingLoopWithStreaming(
       // Execute all tool calls and build tool call history
       const toolResults = [];
       const toolExecutionStartTime = Date.now();
+      let taskStatusReported = false;
+      let reportedTaskStatus: 'completed' | 'failed' | 'needs_clarification' | null = null;
+
       for (const toolBlock of toolUseBlocks) {
         if (toolBlock.type === 'tool_use' && toolBlock.name === 'computer') {
           console.log(`🔧 Executing tool: ${toolBlock.name} (${toolBlock.id})`, trimBase64ForLog(toolBlock.input));
@@ -730,6 +747,65 @@ async function samplingLoopWithStreaming(
               screenshot_url: (toolResult as any).screenshot_url // Add storage URL
             }
           });
+        } else if (toolBlock.type === 'tool_use' && toolBlock.name === 'report_task_status') {
+          console.log(`📊 Task status reported: ${toolBlock.name} (${toolBlock.id})`);
+
+          const { status, message, evidence } = toolBlock.input;
+          taskStatusReported = true;
+          reportedTaskStatus = status;
+
+          // Log the task status report
+          console.log(`📌 Task Status: ${status}`);
+          console.log(`💬 Agent Message: ${message}`);
+          if (evidence) {
+            console.log(`📎 Evidence:`, trimBase64ForLog(evidence));
+          }
+
+          // Map agent status to task status
+          const taskStatusMap = {
+            'completed': 'completed',
+            'failed': 'failed',
+            'needs_clarification': 'paused'
+          };
+          const mappedStatus = taskStatusMap[status as keyof typeof taskStatusMap] || status;
+
+          // Stream task status event to frontend
+          streamCallback({
+            type: 'task_status',
+            status: mappedStatus,
+            agentStatus: status,
+            message: message,
+            evidence: evidence,
+            timestamp: new Date().toISOString()
+          });
+
+          // Create acknowledgment tool result
+          const toolResult: ToolResult = {
+            output: `Task status recorded: ${status}\nSystem will update task accordingly.`
+          };
+
+          const toolResultBlock = {
+            tool_use_id: toolBlock.id,
+            type: "tool_result",
+            content: [{ type: "text", text: toolResult.output }],
+            is_error: false
+          };
+
+          toolResults.push(toolResultBlock);
+
+          // Add to tool calls for conversation history
+          assistantMessage.toolCalls.push({
+            toolCallId: toolBlock.id,
+            toolName: 'report_task_status',
+            args: toolBlock.input,
+            result: {
+              success: true,
+              description: `Task ${status}: ${message}`,
+              error: undefined
+            }
+          });
+
+          console.log(`✅ Task status recorded: ${status}`);
         }
       }
 
@@ -764,6 +840,7 @@ async function samplingLoopWithStreaming(
               anthropic_request: storedRequest,
               anthropic_response: storedResponse,
               anthropic_response_time_ms: apiResponseTimeMs,
+              task_id: taskId,
               metadata: { iteration: iteration + 1 }
             })
             .select()
@@ -786,6 +863,7 @@ async function samplingLoopWithStreaming(
             .insert({
               session_id: sessionId,
               message_id: savedMessageId,
+              task_id: taskId,
               iteration: iteration + 1,
               api_response_time_ms: apiResponseTimeMs,
               iteration_total_time_ms: iterationTotalTimeMs,
@@ -815,6 +893,23 @@ async function samplingLoopWithStreaming(
         console.log(`📊 Total iterations: ${iteration + 1}`);
         console.log(`⏱️  Average time per iteration: ${(totalConversationTimeMs / (iteration + 1)).toFixed(0)}ms`);
 
+        // Update task to completed status
+        if (taskId && !sessionId.startsWith('fallback-')) {
+          try {
+            await supabase
+              .from('tasks')
+              .update({
+                status: 'completed',
+                completed_at: new Date().toISOString(),
+                result_message: responseText
+              })
+              .eq('id', taskId);
+            console.log(`✅ Task ${taskId} marked as completed (natural completion)`);
+          } catch (error) {
+            console.error('⚠️ Failed to update task status:', error);
+          }
+        }
+
         // Update chat session with completion metrics
         if (!sessionId.startsWith('fallback-')) {
           try {
@@ -838,6 +933,54 @@ async function samplingLoopWithStreaming(
           type: 'message',
           message: assistantMessage
         });
+        break;
+      }
+
+      // Check if task status was reported - if so, stop sampling loop
+      if (taskStatusReported) {
+        const totalConversationTimeMs = Date.now() - conversationStartTime;
+        console.log(`✅ Task status reported (${reportedTaskStatus}) - stopping agent execution`);
+        console.log(`⏱️  Total conversation time: ${totalConversationTimeMs}ms (${(totalConversationTimeMs / 1000).toFixed(2)}s)`);
+        console.log(`📊 Total iterations: ${iteration + 1}`);
+
+        // Update task status based on agent report
+        if (taskId && !sessionId.startsWith('fallback-')) {
+          try {
+            const taskStatusMap = {
+              'completed': 'completed',
+              'failed': 'failed',
+              'needs_clarification': 'paused'
+            };
+            const mappedStatus = taskStatusMap[reportedTaskStatus as keyof typeof taskStatusMap] || reportedTaskStatus;
+
+            // Extract agent message and evidence from tool calls
+            const reportToolCall = assistantMessage.toolCalls.find(tc => tc.toolName === 'report_task_status');
+            const agentMessage = reportToolCall?.args?.message;
+            const agentEvidence = reportToolCall?.args?.evidence;
+
+            await supabase
+              .from('tasks')
+              .update({
+                status: mappedStatus,
+                completed_at: new Date().toISOString(),
+                agent_status: reportedTaskStatus,
+                agent_message: agentMessage,
+                agent_evidence: agentEvidence,
+                result_message: responseText
+              })
+              .eq('id', taskId);
+            console.log(`✅ Task ${taskId} updated to status: ${mappedStatus}`);
+          } catch (error) {
+            console.error('⚠️ Failed to update task status:', error);
+          }
+        }
+
+        // Stream final message
+        streamCallback({
+          type: 'message',
+          message: assistantMessage
+        });
+
         break;
       }
 
@@ -866,6 +1009,23 @@ async function samplingLoopWithStreaming(
       const message = error instanceof Error ? error.message : 'Unknown error';
       finalResponse = `🤖 Agent encountered an issue: ${message}`;
 
+      // Update task status to failed
+      if (taskId && !sessionId.startsWith('fallback-')) {
+        try {
+          await supabase
+            .from('tasks')
+            .update({
+              status: 'failed',
+              completed_at: new Date().toISOString(),
+              error_message: message
+            })
+            .eq('id', taskId);
+          console.log(`✅ Task ${taskId} marked as failed`);
+        } catch (err) {
+          console.error('⚠️ Failed to update task status:', err);
+        }
+      }
+
       // Stream error message
       streamCallback({
         type: 'error',
@@ -875,8 +1035,26 @@ async function samplingLoopWithStreaming(
     }
   }
 
+  // Handle max iterations reached
   if (finalResponse === '') {
     finalResponse = `⚠️ Agent stopped after ${maxIterations} iterations. Task may be incomplete.`;
+
+    // Update task to indicate max iterations reached
+    if (taskId && !sessionId.startsWith('fallback-')) {
+      try {
+        await supabase
+          .from('tasks')
+          .update({
+            status: 'failed',
+            completed_at: new Date().toISOString(),
+            error_message: 'Max iterations reached without task completion'
+          })
+          .eq('id', taskId);
+        console.log(`✅ Task ${taskId} marked as failed (max iterations)`);
+      } catch (error) {
+        console.error('⚠️ Failed to update task status:', error);
+      }
+    }
   }
 
   return { finalResponse, conversationHistory };
@@ -965,7 +1143,66 @@ export async function POST(req: Request) {
         }
       }
 
-      // Store user message
+      // === TASK LIFECYCLE MANAGEMENT ===
+      // Check for resumable task (stopped or paused)
+      let currentTaskId: string | null = null;
+      let startIteration = 0;
+
+      if (!currentSessionId.startsWith('fallback-')) {
+        try {
+          // Look for resumable task
+          const { data: resumableTask } = await supabase
+            .from('tasks')
+            .select('id, status, current_iteration, user_message')
+            .eq('session_id', currentSessionId)
+            .in('status', ['stopped', 'paused'])
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .single();
+
+          if (resumableTask) {
+            // Resume existing task
+            currentTaskId = resumableTask.id;
+            startIteration = resumableTask.current_iteration || 0;
+            console.log(`🔄 Resuming task ${currentTaskId} from iteration ${startIteration} (status: ${resumableTask.status})`);
+
+            // Update task status to running
+            await supabase
+              .from('tasks')
+              .update({
+                status: 'running',
+                started_at: new Date().toISOString()
+              })
+              .eq('id', currentTaskId);
+          } else {
+            // Create new task
+            const { data: newTask, error: taskError } = await supabase
+              .from('tasks')
+              .insert({
+                session_id: currentSessionId,
+                browser_session_id: currentBrowserSessionId,
+                status: 'running',
+                user_message: userMessage,
+                started_at: new Date().toISOString(),
+                max_iterations: AGENT_MAX_ITERATIONS,
+                current_iteration: 0
+              })
+              .select()
+              .single();
+
+            if (taskError) {
+              console.error('⚠️ Failed to create task:', taskError);
+            } else {
+              currentTaskId = newTask?.id;
+              console.log(`✅ Created new task: ${currentTaskId}`);
+            }
+          }
+        } catch (error) {
+          console.error('⚠️ Error in task lifecycle management:', error);
+        }
+      }
+
+      // Store user message with task_id
       if (!currentSessionId.startsWith('fallback-')) {
         try {
           await supabase
@@ -973,7 +1210,8 @@ export async function POST(req: Request) {
             .insert({
               session_id: currentSessionId,
               role: 'user',
-              content: userMessage
+              content: userMessage,
+              task_id: currentTaskId
             });
         } catch (error) {
           console.error('⚠️ Failed to store user message:', error);
@@ -1068,13 +1306,16 @@ export async function POST(req: Request) {
               }
 
               // Execute sampling loop with streaming callback
-              // Using default maxIterations (35) from function signature
+              // Pass taskId and startIteration for task lifecycle management
               const { finalResponse } = await samplingLoopWithStreaming(
                 systemPrompt,
                 conversationMessages,
                 currentBrowserSessionId,
                 currentSessionId,
-                sendEvent
+                sendEvent,
+                AGENT_MAX_ITERATIONS,
+                currentTaskId,
+                startIteration
               );
 
               // Send completion event
