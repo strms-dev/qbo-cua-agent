@@ -28,7 +28,9 @@
       "Bash(awk:*)",
       "Bash(dir:*)",
       "Bash(git add:*)",
-      "Bash(git commit -m \"$(cat <<''EOF''\nMigrate from Scrapybara to OnKernel browser automation\n\nUpdated browser automation provider from Scrapybara to OnKernel, including API route changes, new migrations, and component updates.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\" --author \"Gonzalo Alvarez de Toledo <gonzalo@example.com>\")"
+      "Bash(git commit -m \"$(cat <<''EOF''\nMigrate from Scrapybara to OnKernel browser automation\n\nUpdated browser automation provider from Scrapybara to OnKernel, including API route changes, new migrations, and component updates.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\" --author \"Gonzalo Alvarez de Toledo <gonzalo@example.com>\")",
+      "Bash(git checkout:*)",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []
