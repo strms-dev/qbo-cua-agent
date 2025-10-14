@@ -1278,12 +1278,13 @@ export async function POST(req: Request) {
             };
 
             try {
-              // Send initial metadata including stream URL immediately
+              // Send initial metadata including stream URL and taskId immediately
               sendEvent({
                 type: 'metadata',
                 sessionId: currentSessionId,
                 browserSessionId: currentBrowserSessionId,
                 streamUrl: streamUrl,
+                taskId: currentTaskId,
                 timestamp: new Date().toISOString()
               });
 

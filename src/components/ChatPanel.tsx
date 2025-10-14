@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 // import { useChat } from 'ai/react';
-import { Send, Bot, User, Camera, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
+import { Send, Bot, User, Camera, AlertTriangle, CheckCircle, XCircle, Square } from 'lucide-react';
 
 interface ChatPanelProps {
   sessionId: string | null;
@@ -27,6 +27,8 @@ export default function ChatPanel({
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [expandedThinking, setExpandedThinking] = useState<Record<string, boolean>>({});
+  const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
+  const [taskStatus, setTaskStatus] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const toggleThinking = (messageId: string) => {
@@ -182,6 +184,12 @@ export default function ChatPanel({
                     console.log('🔗 Stream URL received:', data.streamUrl);
                     onStreamUrlChange(data.streamUrl);
                   }
+                  // Capture task ID from metadata
+                  if (data.taskId) {
+                    console.log('📋 Task ID received:', data.taskId);
+                    setCurrentTaskId(data.taskId);
+                    setTaskStatus('running');
+                  }
                   break;
 
                 case 'message':
@@ -197,10 +205,32 @@ export default function ChatPanel({
                   setMessages(prev => [...prev, agentMessage]);
                   break;
 
+                case 'task_status':
+                  // Handle task status updates from agent
+                  console.log('📊 Task status update:', data.status, data.message);
+                  setTaskStatus(data.status);
+
+                  // Show status message to user
+                  const statusEmoji = {
+                    'completed': '✅',
+                    'failed': '❌',
+                    'paused': '⏸️',
+                    'stopped': '🛑'
+                  }[data.status] || '📌';
+
+                  const statusMessage = {
+                    id: (Date.now() + Math.random()).toString(),
+                    role: 'assistant',
+                    content: `${statusEmoji} Task ${data.status}: ${data.message}`
+                  };
+                  setMessages(prev => [...prev, statusMessage]);
+                  break;
+
                 case 'done':
                   console.log('✅ Agent completed task');
                   setIsLoading(false);
                   onAgentActiveChange(false);
+                  setTaskStatus('completed');
                   break;
 
                 case 'error':
@@ -213,6 +243,7 @@ export default function ChatPanel({
                   setMessages(prev => [...prev, errorMsg]);
                   setIsLoading(false);
                   onAgentActiveChange(false);
+                  setTaskStatus('failed');
                   break;
               }
             }
@@ -286,6 +317,54 @@ export default function ChatPanel({
     onSessionChange(null);
     onBrowserSessionChange(null);
     onStreamUrlChange(null);
+    setCurrentTaskId(null);
+    setTaskStatus(null);
+  };
+
+  const handleStop = async () => {
+    if (!currentTaskId) {
+      console.warn('⚠️ No active task to stop');
+      return;
+    }
+
+    console.log('🛑 Stopping task:', currentTaskId);
+
+    try {
+      const response = await fetch(`/api/tasks/${currentTaskId}/stop`, {
+        method: 'POST',
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to stop task: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('✅ Task stopped:', data);
+
+      // Update UI state
+      setIsLoading(false);
+      onAgentActiveChange(false);
+      setTaskStatus('stopped');
+
+      // Add system message about stop
+      const stopMessage = {
+        id: (Date.now() + Math.random()).toString(),
+        role: 'assistant',
+        content: '🛑 Task stopped by user. You can continue by sending a new message.'
+      };
+      setMessages(prev => [...prev, stopMessage]);
+
+    } catch (error) {
+      console.error('❌ Failed to stop task:', error);
+
+      // Show error message
+      const errorMessage = {
+        id: (Date.now() + Math.random()).toString(),
+        role: 'assistant',
+        content: `❌ Failed to stop task: ${error instanceof Error ? error.message : 'Unknown error'}`
+      };
+      setMessages(prev => [...prev, errorMessage]);
+    }
   };
 
   const formatToolCall = (toolCall: any) => {
@@ -443,6 +522,60 @@ export default function ChatPanel({
             )}
           </div>
         );
+      case 'report_task_status':
+        const statusColors = {
+          'completed': { bg: 'bg-green-50', border: 'border-green-200', text: 'text-green-800', icon: '✅' },
+          'failed': { bg: 'bg-red-50', border: 'border-red-200', text: 'text-red-800', icon: '❌' },
+          'needs_clarification': { bg: 'bg-yellow-50', border: 'border-yellow-200', text: 'text-yellow-800', icon: '⏸️' }
+        };
+        const statusColor = statusColors[toolCall.args.status as keyof typeof statusColors] || statusColors['completed'];
+
+        return (
+          <div className={`${statusColor.bg} p-3 rounded-md border ${statusColor.border} mt-2`}>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-lg">{statusColor.icon}</span>
+              <span className={`font-medium ${statusColor.text}`}>Task Status Report</span>
+            </div>
+            <div className="text-sm">
+              <div><strong>Status:</strong> {toolCall.args.status}</div>
+              <div className="mt-1"><strong>Message:</strong> {toolCall.args.message}</div>
+              {toolCall.args.evidence && (
+                <div className="mt-2">
+                  <strong>Evidence:</strong>
+                  {toolCall.args.evidence.screenshot_url && (
+                    <div className="mt-1">
+                      <a
+                        href={toolCall.args.evidence.screenshot_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-600 hover:underline text-xs"
+                      >
+                        View Screenshot
+                      </a>
+                    </div>
+                  )}
+                  {toolCall.args.evidence.extracted_data && (
+                    <div className="mt-1 p-2 bg-white rounded text-xs">
+                      <pre className="whitespace-pre-wrap">{JSON.stringify(toolCall.args.evidence.extracted_data, null, 2)}</pre>
+                    </div>
+                  )}
+                  {toolCall.args.evidence.error_details && (
+                    <div className="mt-1 text-red-600 text-xs">
+                      {toolCall.args.evidence.error_details}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            {toolCall.result && (
+              <div className="mt-2 text-xs">
+                <div className="font-medium text-green-600">
+                  {toolCall.result.description}
+                </div>
+              </div>
+            )}
+          </div>
+        );
       case 'approval_request':
         return (
           <div className="bg-yellow-50 p-3 rounded-md border border-yellow-200 mt-2">
@@ -488,9 +621,27 @@ export default function ChatPanel({
         <div className="flex items-start justify-between">
           <div>
             <h1 className="text-xl font-semibold text-gray-800">STRMS AI Agent</h1>
-            <p className="text-sm text-gray-600">
-              AI-powered computer use agent
-            </p>
+            <div className="flex items-center gap-2">
+              <p className="text-sm text-gray-600">
+                AI-powered computer use agent
+              </p>
+              {/* Task Status Indicator */}
+              {taskStatus && taskStatus !== 'completed' && (
+                <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                  taskStatus === 'running' ? 'bg-blue-100 text-blue-700' :
+                  taskStatus === 'stopped' ? 'bg-gray-100 text-gray-700' :
+                  taskStatus === 'paused' ? 'bg-yellow-100 text-yellow-700' :
+                  taskStatus === 'failed' ? 'bg-red-100 text-red-700' :
+                  'bg-gray-100 text-gray-700'
+                }`}>
+                  {taskStatus === 'running' && '🔄 Running'}
+                  {taskStatus === 'stopped' && '🛑 Stopped'}
+                  {taskStatus === 'paused' && '⏸️ Paused'}
+                  {taskStatus === 'failed' && '❌ Failed'}
+                  {!['running', 'stopped', 'paused', 'failed'].includes(taskStatus) && `📌 ${taskStatus}`}
+                </span>
+              )}
+            </div>
           </div>
           {/* New Chat button - only show when reviewing a thread */}
           {sessionId && messages.length > 0 && !isLoading && (
@@ -607,13 +758,25 @@ export default function ChatPanel({
             className="flex-1 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             disabled={isLoading || isWaitingForApproval}
           />
-          <button
-            type="submit"
-            disabled={isLoading || isWaitingForApproval || !input.trim()}
-            className="px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-          >
-            <Send className="w-4 h-4" />
-          </button>
+          {isLoading ? (
+            <button
+              type="button"
+              onClick={handleStop}
+              className="px-4 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 flex items-center gap-2 transition-colors"
+              title="Stop current task"
+            >
+              <Square className="w-4 h-4" />
+              <span className="hidden sm:inline">Stop</span>
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={isWaitingForApproval || !input.trim()}
+              className="px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            >
+              <Send className="w-4 h-4" />
+            </button>
+          )}
         </form>
       </div>
     </div>
