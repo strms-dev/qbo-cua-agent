@@ -17,9 +17,20 @@
       "WebSearch",
       "Read(//c/Users/GonzaloAlvarezdeTole/Pictures/Screenshots/**)",
       "WebFetch(domain:supabase.com)",
-      "Bash(git merge:*)",
+      "WebFetch(domain:www.onkernel.com)",
+      "WebFetch(domain:playwright.dev)",
+      "Bash(npm run dev:*)",
+      "Bash(claude mcp add:*)",
+      "mcp__supabase__list_tables",
+      "mcp__supabase__execute_sql",
+      "WebFetch(domain:qbxiujvljytkgneysyww.supabase.co)",
+      "Read(//c/Users/GonzaloAlvarezdeTole/AppData/Local/Temp/**)",
+      "Bash(awk:*)",
+      "Bash(dir:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(git merge:*)",
+      "Bash(git checkout:*)"
     ],
     "deny": [],
     "ask": []
