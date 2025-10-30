@@ -1082,7 +1082,15 @@ async function samplingLoopWithStreaming(
           console.log(`💾 Memory tool: ${toolBlock.id}`, trimBase64ForLog(toolBlock.input));
 
           const memoryHandlers = new MemoryToolHandlers();
-          const { command, path, file_text, old_str, new_str, insert_line, new_path } = toolBlock.input;
+          const { command, path, file_text, old_str, new_str, insert_line, new_path } = toolBlock.input as {
+            command: 'view' | 'create' | 'str_replace' | 'insert' | 'delete' | 'rename';
+            path: string;
+            file_text?: string;
+            old_str?: string;
+            new_str?: string;
+            insert_line?: number;
+            new_path?: string;
+          };
 
           let toolResult: ToolResult;
           try {
