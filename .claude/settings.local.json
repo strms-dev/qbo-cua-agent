@@ -30,7 +30,11 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git merge:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(git push:*)",
+      "mcp__supabase__apply_migration",
+      "Bash(mcp list-tools:*)",
+      "Bash(mcp list-resources:*)"
     ],
     "deny": [],
     "ask": []

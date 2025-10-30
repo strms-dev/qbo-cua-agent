@@ -66,15 +66,17 @@ export default function ChatPanel({
         role: msg.role,
         content: msg.content,
         thinking: msg.thinking || undefined,
-        toolCalls: msg.tool_calls || []
+        toolCalls: msg.tool_calls || [],
+        anthropic_request: msg.anthropic_request || undefined,
+        anthropic_response: msg.anthropic_response || undefined
       })) || [];
 
       setMessages(formattedMessages);
 
-      // Update browser session if available
-      if (data.session?.browserSessionId && data.session.browserSessionId !== browserSessionId) {
-        onBrowserSessionChange(data.session.browserSessionId);
-      }
+      // Don't update browser session when loading history
+      // Browser session should only be activated when user actively sends messages in that session
+      // It will be set via metadata events from the chat API when messages are sent
+      // This prevents old browser sessions from persisting when user clicks "New Chat"
 
       console.log('✅ Loaded', formattedMessages.length, 'messages for session', sid);
     } catch (error) {
@@ -209,21 +211,8 @@ export default function ChatPanel({
                   // Handle task status updates from agent
                   console.log('📊 Task status update:', data.status, data.message);
                   setTaskStatus(data.status);
-
-                  // Show status message to user
-                  const statusEmoji = {
-                    'completed': '✅',
-                    'failed': '❌',
-                    'paused': '⏸️',
-                    'stopped': '🛑'
-                  }[data.status] || '📌';
-
-                  const statusMessage = {
-                    id: (Date.now() + Math.random()).toString(),
-                    role: 'assistant',
-                    content: `${statusEmoji} Task ${data.status}: ${data.message}`
-                  };
-                  setMessages(prev => [...prev, statusMessage]);
+                  // Note: Don't create a separate status message here
+                  // The agent's message with report_task_status tool call will already display the status
                   break;
 
                 case 'done':
@@ -609,6 +598,49 @@ export default function ChatPanel({
             </div>
           </div>
         );
+      case 'memory':
+        return (
+          <div className="bg-purple-50 p-3 rounded-md border border-purple-200 mt-2">
+            <div className="flex items-center gap-2 mb-2">
+              <svg className="w-4 h-4 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <span className="font-medium text-purple-800">Memory Operation</span>
+            </div>
+            <div className="text-sm">
+              <div><strong>Command:</strong> {toolCall.args.command}</div>
+              <div><strong>Path:</strong> {toolCall.args.path}</div>
+              {toolCall.args.file_text && (
+                <div className="mt-2">
+                  <strong>Content:</strong>
+                  <div className="mt-1 p-2 bg-white rounded text-xs font-mono whitespace-pre-wrap max-h-40 overflow-y-auto">
+                    {toolCall.args.file_text.substring(0, 500)}{toolCall.args.file_text.length > 500 ? '...' : ''}
+                  </div>
+                </div>
+              )}
+              {toolCall.args.old_str && (
+                <div className="mt-1"><strong>Replace:</strong> "{toolCall.args.old_str.substring(0, 50)}{toolCall.args.old_str.length > 50 ? '...' : ''}"</div>
+              )}
+              {toolCall.args.new_str && (
+                <div className="mt-1"><strong>With:</strong> "{toolCall.args.new_str.substring(0, 50)}{toolCall.args.new_str.length > 50 ? '...' : ''}"</div>
+              )}
+            </div>
+            {toolCall.result && (
+              <div className="mt-2 text-xs">
+                <div className={`font-medium ${
+                  toolCall.result.success ? 'text-green-600' : 'text-red-600'
+                }`}>
+                  {toolCall.result.success ? '✅ Success' : '❌ Failed'}: {toolCall.result.description}
+                </div>
+                {toolCall.result.error && (
+                  <div className="text-red-600 mt-1 p-2 bg-red-50 rounded">
+                    <strong>Error:</strong> {toolCall.result.error}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
       default:
         return null;
     }
@@ -698,7 +730,9 @@ export default function ChatPanel({
                     : 'bg-gray-100 text-gray-800'
                 }`}
               >
-                <div className="whitespace-pre-wrap">{message.content}</div>
+                {message.content && message.content.trim() !== '' && (
+                  <div className="whitespace-pre-wrap">{message.content}</div>
+                )}
 
                 {/* Tool Calls */}
                 {(message as any).toolCalls?.map((toolCall: any, index: number) => (

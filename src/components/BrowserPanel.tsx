@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Monitor, Square } from 'lucide-react';
+import { Monitor, Unplug, Plug, Trash2 } from 'lucide-react';
 
 interface BrowserPanelProps {
   browserSessionId: string | null;
@@ -15,6 +15,8 @@ export default function BrowserPanel({ browserSessionId, chatSessionId, streamUr
   const [sessionStatus, setSessionStatus] = useState<'active' | 'stopped' | 'terminated' | 'demo' | 'not_found' | 'error'>('stopped');
   const [isLoading, setIsLoading] = useState(false);
   const [lastScreenshot, setLastScreenshot] = useState<string>('');
+  const [cdpConnected, setCdpConnected] = useState<boolean>(false);
+  const [showDestroyConfirm, setShowDestroyConfirm] = useState(false);
 
   // Debug logging
   console.log('🖥️ BrowserPanel props:', {
@@ -64,22 +66,110 @@ export default function BrowserPanel({ browserSessionId, chatSessionId, streamUr
     return null;
   };
 
-  const handleSessionAction = async (action: 'stop') => {
+  // Fetch CDP connection status from chat session API
+  const fetchCdpStatus = async () => {
+    if (!chatSessionId) return;
+
+    try {
+      const response = await fetch(`/api/sessions/${chatSessionId}`);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.browserSession) {
+          setCdpConnected(data.browserSession.cdpConnected ?? true);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch CDP status:', error);
+    }
+  };
+
+  // Fetch CDP status when component mounts or browserSessionId changes
+  useEffect(() => {
+    if (browserSessionId && chatSessionId) {
+      fetchCdpStatus();
+    }
+  }, [browserSessionId, chatSessionId]);
+
+  const handleDisconnectCDP = async () => {
     if (!browserSessionId) return;
 
     setIsLoading(true);
     try {
-      const response = await fetch(`/api/browser/${browserSessionId}/${action}`, {
+      const response = await fetch(`/api/browser/${browserSessionId}/disconnect-cdp`, {
         method: 'POST',
       });
 
       if (response.ok) {
-        await fetchSessionStatus();
+        setCdpConnected(false);
+        console.log('✅ CDP disconnected successfully');
       }
     } catch (error) {
-      console.error(`Failed to ${action} session:`, error);
+      console.error('Failed to disconnect CDP:', error);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleReconnectCDP = async () => {
+    if (!browserSessionId) return;
+
+    setIsLoading(true);
+    try {
+      const response = await fetch(`/api/browser/${browserSessionId}/reconnect-cdp`, {
+        method: 'POST',
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setCdpConnected(true);
+        if (data.liveViewUrl) {
+          setBrowserUrl(data.liveViewUrl);
+        }
+        console.log('✅ CDP reconnected successfully');
+        // Refresh page to reload iframe
+        window.location.reload();
+      }
+    } catch (error) {
+      console.error('Failed to reconnect CDP:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleDestroyBrowser = async () => {
+    if (!browserSessionId) return;
+
+    setIsLoading(true);
+    try {
+      const response = await fetch(`/api/browser/${browserSessionId}/destroy`, {
+        method: 'POST',
+      });
+
+      if (response.ok) {
+        console.log('✅ Browser session destroyed successfully');
+
+        // Also mark chat session as completed
+        if (chatSessionId) {
+          try {
+            await fetch(`/api/sessions/${chatSessionId}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ status: 'completed' })
+            });
+            console.log('✅ Chat session marked as completed');
+          } catch (error) {
+            console.error('⚠️ Failed to update chat session status:', error);
+          }
+        }
+
+        // Reload the page to reset the UI
+        window.location.reload();
+      }
+    } catch (error) {
+      console.error('Failed to destroy browser:', error);
+    } finally {
+      setIsLoading(false);
+      setShowDestroyConfirm(false);
     }
   };
 
@@ -117,18 +207,64 @@ export default function BrowserPanel({ browserSessionId, chatSessionId, streamUr
         </div>
 
         {/* Browser Controls */}
-        <div className="flex items-center gap-2">
-          {/* Stop Button - only show when active */}
-          {/* Note: Onkernel handles pause/resume automatically, so we only provide Stop */}
-          {sessionStatus === 'active' && (
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Disconnect CDP Button - show when CDP connected */}
+          {cdpConnected && (
             <button
-              onClick={() => handleSessionAction('stop')}
+              onClick={handleDisconnectCDP}
               disabled={isLoading}
-              className="flex items-center gap-1 px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700 disabled:opacity-50"
+              className="flex items-center gap-1 px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
             >
-              <Square className="w-4 h-4" />
-              Stop Session
+              <Unplug className="w-4 h-4" />
+              Disconnect CDP
             </button>
+          )}
+
+          {/* Reconnect CDP Button - show when CDP disconnected */}
+          {!cdpConnected && (
+            <>
+              <button
+                onClick={handleReconnectCDP}
+                disabled={isLoading}
+                className="flex items-center gap-1 px-3 py-1 bg-green-600 text-white rounded text-sm hover:bg-green-700 disabled:opacity-50"
+              >
+                <Plug className="w-4 h-4" />
+                Reconnect CDP
+              </button>
+              <div className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded">
+                ℹ️ CDP disconnected to save costs
+              </div>
+            </>
+          )}
+
+          {/* Destroy Session Button - always show, with confirmation */}
+          {!showDestroyConfirm ? (
+            <button
+              onClick={() => setShowDestroyConfirm(true)}
+              disabled={isLoading}
+              className="flex items-center gap-1 px-3 py-1 bg-red-700 text-white rounded text-sm hover:bg-red-800 disabled:opacity-50 border-2 border-red-900"
+            >
+              <Trash2 className="w-4 h-4" />
+              Destroy Session
+            </button>
+          ) : (
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-red-600 font-semibold">Confirm destroy session?</span>
+              <button
+                onClick={handleDestroyBrowser}
+                disabled={isLoading}
+                className="px-3 py-1 bg-red-700 text-white rounded text-sm hover:bg-red-800 disabled:opacity-50"
+              >
+                Yes, Destroy Session
+              </button>
+              <button
+                onClick={() => setShowDestroyConfirm(false)}
+                disabled={isLoading}
+                className="px-3 py-1 bg-gray-300 text-gray-700 rounded text-sm hover:bg-gray-400 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
           )}
         </div>
 

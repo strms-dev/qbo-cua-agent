@@ -9,12 +9,12 @@ import { NextRequest } from 'next/server';
  */
 export async function POST(
   req: NextRequest,
-  { params }: { params: { taskId: string } }
+  { params }: { params: Promise<{ taskId: string }> }
 ) {
   console.log('🛑 Stop task endpoint called');
 
   try {
-    const { taskId } = params;
+    const { taskId } = await params;
 
     if (!taskId) {
       return Response.json(
