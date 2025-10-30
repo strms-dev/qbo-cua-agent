@@ -1,6 +1,8 @@
 import { supabase } from '@/lib/supabase';
 import { onkernelClient } from '@/lib/onkernel';
 import { MemoryToolHandlers } from '@/lib/memory-handlers';
+import { sendWebhook } from '@/lib/webhook';
+import { ExecutionConfig } from '@/types/batch';
 import Anthropic from '@anthropic-ai/sdk';
 
 // Initialize direct Anthropic client
@@ -70,7 +72,8 @@ You have access to these tools:
   - wait: Pause between actions
   - double_click, triple_click: Multiple clicks
 2. report_task_status allows you to report task completion status to the user. 
-3. memory allows you to store and retrieve earlier progress. 
+3. memory allows you to store and retrieve earlier progress. Memory files are named EXACTLY using the task_id (e.g., task_id: "01e15647-d7e3-49ba-9705-96139222aed3" → memory file path: "/memories/01e15647-d7e3-49ba-9705-96139222aed3")
+
 
 
 #MEMORY MANAGEMENT:
@@ -85,15 +88,48 @@ You have access to these tools:
   - Update memory after completing significant milestones
   - Memory updates should be incremental - don't lose previous progress
   - Use str_replace to update specific parts of memory without losing other data
-- Memory format should include:
-  - current_step: string
-  - completed_actions: array of action descriptions
-  - important_context: object with discovered information
-  - last_screenshot_description: string
-  - next_planned_action: string
-  - obstacles_encountered: array
-  - decisions_made: array
-
+- Memory ile must maintain the following JSON structure:
+{
+  "task_id": "string",
+  "task_description": "detailed description of what needs to be accomplished",
+  "status": "queued | running | stopped | paused | completed | failed",
+  "created_at": "ISO timestamp",
+  "last_updated": "ISO timestamp",
+  "progress": {
+    "completed_steps": [
+      {
+        "step_number": 1,
+        "description": "what was done",
+        "timestamp": "ISO timestamp",
+        "outcome": "success | failure",
+        "details": "specific details about what was accomplished"
+      }
+    ],
+    "pending_steps": [
+      {
+        "step_number": 2,
+        "description": "what needs to be done",
+        "prerequisites": "what must be completed first",
+        "blockers": "any identified obstacles"
+      }
+    ]
+  },
+  "execution_summary": {
+    "successful_actions": [
+      {
+        "action_type": "click | type | scroll | wait | key | screenshot",
+        "description": "detailed description of the action",
+        "target": "specific element/page/form interacted with",
+        "result": "what was achieved",
+        "timestamp": "ISO timestamp"
+      }
+    ],
+    "key_data_captured": {
+      "field_name": "value extracted or entered"
+    }
+  },
+  "notes": "any additional context, observations, or reminders for resuming the task"
+}
 
 #IMPORTANT:
 - Always call the computer_use tool to control the browser.
@@ -593,7 +629,7 @@ function removeOldThinkingBlocks(messages: any[], keepRecentCount: number): any[
 
 
 // Streaming sampling loop with real-time updates
-async function samplingLoopWithStreaming(
+export async function samplingLoopWithStreaming(
   systemPrompt: string,
   messages: any[],
   browserSessionId: string,
@@ -601,11 +637,29 @@ async function samplingLoopWithStreaming(
   streamCallback: (event: any) => void,
   maxIterations: number = AGENT_MAX_ITERATIONS,
   taskId: string | null = null,
-  startIteration: number = 0
+  startIteration: number = 0,
+  executionConfig?: ExecutionConfig
 ): Promise<{finalResponse: string, conversationHistory: any[]}> {
   let currentMessages = [...messages];
   let finalResponse = '';
   let conversationHistory: any[] = [];
+
+  // Build effective execution config (use provided config or fallback to env vars)
+  const effectiveConfig: ExecutionConfig = {
+    agentMaxIterations: executionConfig?.agentMaxIterations ?? AGENT_MAX_ITERATIONS,
+    samplingLoopDelayMs: executionConfig?.samplingLoopDelayMs ?? SAMPLING_LOOP_DELAY_MS,
+    maxBase64Screenshots: executionConfig?.maxBase64Screenshots ?? MAX_BASE64_SCREENSHOTS,
+    keepRecentThinkingBlocks: executionConfig?.keepRecentThinkingBlocks ?? KEEP_RECENT_THINKING_BLOCKS,
+    thinkingBudgetTokens: executionConfig?.thinkingBudgetTokens ?? THINKING_BUDGET_TOKENS,
+    anthropicMaxTokens: executionConfig?.anthropicMaxTokens ?? ANTHROPIC_MAX_TOKENS,
+    anthropicModel: executionConfig?.anthropicModel ?? ANTHROPIC_MODEL,
+    typingDelayMs: executionConfig?.typingDelayMs,
+    onkernelTimeoutSeconds: executionConfig?.onkernelTimeoutSeconds,
+    webhookUrl: executionConfig?.webhookUrl,
+    webhookSecret: executionConfig?.webhookSecret,
+    batchExecutionId: executionConfig?.batchExecutionId,
+    taskIndex: executionConfig?.taskIndex,
+  };
 
   // Track conversation start time
   const conversationStartTime = Date.now();
@@ -674,7 +728,7 @@ async function samplingLoopWithStreaming(
 
     try {
       // Optimize messages (keep only last N screenshots as base64)
-      const optimizedMessages = optimizeScreenshotsInMessages(currentMessages, MAX_BASE64_SCREENSHOTS);
+      const optimizedMessages = optimizeScreenshotsInMessages(currentMessages, effectiveConfig.maxBase64Screenshots);
 
       // Count screenshots for logging
       let totalScreenshots = 0;
@@ -689,13 +743,13 @@ async function samplingLoopWithStreaming(
         }
       });
 
-      const optimizedCount = Math.max(0, totalScreenshots - MAX_BASE64_SCREENSHOTS);
+      const optimizedCount = Math.max(0, totalScreenshots - effectiveConfig.maxBase64Screenshots);
       if (optimizedCount > 0) {
-        console.log(`📊 Screenshot optimization: ${optimizedCount} screenshots converted to URLs (keeping ${MAX_BASE64_SCREENSHOTS} as base64)`);
+        console.log(`📊 Screenshot optimization: ${optimizedCount} screenshots converted to URLs (keeping ${effectiveConfig.maxBase64Screenshots} as base64)`);
       }
 
       // Remove old thinking blocks (keep only last N)
-      const finalMessages = removeOldThinkingBlocks(optimizedMessages, KEEP_RECENT_THINKING_BLOCKS);
+      const finalMessages = removeOldThinkingBlocks(optimizedMessages, effectiveConfig.keepRecentThinkingBlocks);
 
       // Count thinking blocks for logging
       let totalThinkingBlocks = 0;
@@ -707,15 +761,15 @@ async function samplingLoopWithStreaming(
         }
       });
 
-      const thinkingBlocksRemoved = Math.max(0, totalThinkingBlocks - KEEP_RECENT_THINKING_BLOCKS);
+      const thinkingBlocksRemoved = Math.max(0, totalThinkingBlocks - effectiveConfig.keepRecentThinkingBlocks);
       if (thinkingBlocksRemoved > 0) {
-        console.log(`🧠 Thinking block optimization: ${thinkingBlocksRemoved} thinking blocks removed (keeping ${KEEP_RECENT_THINKING_BLOCKS} recent)`);
+        console.log(`🧠 Thinking block optimization: ${thinkingBlocksRemoved} thinking blocks removed (keeping ${effectiveConfig.keepRecentThinkingBlocks} recent)`);
       }
 
       // Build base API request
       const apiRequest: any = {
-        model: ANTHROPIC_MODEL,
-        max_tokens: ANTHROPIC_MAX_TOKENS,
+        model: effectiveConfig.anthropicModel,
+        max_tokens: effectiveConfig.anthropicMaxTokens,
         system: systemPrompt,
         messages: finalMessages,
         tools: [COMPUTER_TOOL, REPORT_TASK_STATUS_TOOL, MEMORY_TOOL]
@@ -772,7 +826,7 @@ async function samplingLoopWithStreaming(
       if (ANTHROPIC_THINKING_ENABLED) {
         apiRequest.thinking = {
           type: "enabled" as const,
-          budget_tokens: THINKING_BUDGET_TOKENS
+          budget_tokens: effectiveConfig.thinkingBudgetTokens
         };
       }
 
@@ -1312,7 +1366,7 @@ async function samplingLoopWithStreaming(
             const agentMessage = reportToolCall?.args?.message;
             const agentEvidence = reportToolCall?.args?.evidence;
 
-            await supabase
+            const { data: taskRecord } = await supabase
               .from('tasks')
               .update({
                 status: mappedStatus,
@@ -1322,8 +1376,35 @@ async function samplingLoopWithStreaming(
                 agent_evidence: agentEvidence,
                 result_message: responseText
               })
-              .eq('id', taskId);
+              .eq('id', taskId)
+              .select('batch_execution_id, task_index')
+              .single();
             console.log(`✅ Task ${taskId} updated to status: ${mappedStatus}`);
+
+            // Send webhook notification if configured (don't await - fire and forget)
+            if (effectiveConfig.webhookUrl) {
+              const webhookPayload = {
+                type: 'task_status' as const,
+                batchExecutionId: effectiveConfig.batchExecutionId || taskRecord?.batch_execution_id || '',
+                taskId: taskId,
+                taskIndex: effectiveConfig.taskIndex ?? taskRecord?.task_index ?? 0,
+                status: mappedStatus as 'completed' | 'failed' | 'paused',
+                agentStatus: reportedTaskStatus as 'completed' | 'failed' | 'needs_clarification',
+                message: agentMessage || '',
+                reasoning: reportToolCall?.args?.reasoning,
+                nextStep: reportToolCall?.args?.next_step,
+                evidence: agentEvidence,
+                timestamp: new Date().toISOString()
+              };
+
+              // Fire webhook without blocking (catch errors to prevent failures)
+              sendWebhook(effectiveConfig.webhookUrl, webhookPayload, effectiveConfig.webhookSecret)
+                .catch(error => {
+                  console.error('⚠️ Webhook delivery failed (continuing execution):', error.message);
+                });
+
+              console.log(`📡 Webhook notification sent to: ${effectiveConfig.webhookUrl}`);
+            }
           } catch (error) {
             console.error('⚠️ Failed to update task status:', error);
           }
@@ -1386,7 +1467,7 @@ async function samplingLoopWithStreaming(
       }
 
       // Small delay between iterations to avoid overwhelming the API
-      await new Promise(resolve => setTimeout(resolve, SAMPLING_LOOP_DELAY_MS));
+      await new Promise(resolve => setTimeout(resolve, effectiveConfig.samplingLoopDelayMs));
 
     } catch (error: unknown) {
       console.error('❌ Sampling loop error:', error);

@@ -124,22 +124,31 @@ export interface WebhookPayload {
 
 /**
  * Internal execution config passed to samplingLoopWithStreaming
+ * Normalized config with all optional fields from ConfigOverrides converted to required with defaults
  */
 export interface ExecutionConfig {
-  // Required execution parameters
-  maxIterations: number;
-  samplingDelay: number;
-  maxBase64Screenshots: number;
-  keepRecentThinkingBlocks: number;
-  thinkingBudgetTokens: number;
-  anthropicMaxTokens: number;
-  anthropicModel: string;
+  // Agent Loop Configuration
+  agentMaxIterations: number;           // Default: 45
+  samplingLoopDelayMs: number;          // Default: 100
+
+  // Screenshot & Context Management
+  maxBase64Screenshots: number;         // Default: 3
+  keepRecentThinkingBlocks: number;     // Default: 50
+
+  // Anthropic API Configuration
+  thinkingBudgetTokens: number;         // Default: 2048
+  anthropicMaxTokens: number;           // Default: 4096
+  anthropicModel: string;               // Default: claude-sonnet-4-20250514
+
+  // OnKernel Configuration (not directly used in samplingLoop, but part of config)
+  typingDelayMs?: number;               // Default: 0 (handled by OnkernelClient)
+  onkernelTimeoutSeconds?: number;      // Default: 60 (handled by OnkernelClient)
 
   // Webhook configuration
   webhookUrl?: string;
   webhookSecret?: string;
 
-  // Batch tracking
+  // Batch tracking (for webhook payload)
   batchExecutionId?: string;
   taskIndex?: number;
 }
