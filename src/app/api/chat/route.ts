@@ -1102,17 +1102,17 @@ async function samplingLoopWithStreaming(
                 break;
 
               case 'create':
-                await memoryHandlers.create(path, file_text);
+                await memoryHandlers.create(path, file_text!);
                 toolResult = { output: `Created ${path}` };
                 break;
 
               case 'str_replace':
-                await memoryHandlers.strReplace(path, old_str, new_str);
+                await memoryHandlers.strReplace(path, old_str!, new_str!);
                 toolResult = { output: `Updated ${path}` };
                 break;
 
               case 'insert':
-                await memoryHandlers.insert(path, insert_line, new_str);
+                await memoryHandlers.insert(path, insert_line!, new_str!);
                 toolResult = { output: `Inserted text at line ${insert_line} in ${path}` };
                 break;
 
@@ -1122,7 +1122,7 @@ async function samplingLoopWithStreaming(
                 break;
 
               case 'rename':
-                await memoryHandlers.rename(path, new_path);
+                await memoryHandlers.rename(path, new_path!);
                 toolResult = { output: `Renamed ${path} to ${new_path}` };
                 break;
 
