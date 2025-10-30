@@ -1016,7 +1016,13 @@ async function samplingLoopWithStreaming(
         } else if (toolBlock.type === 'tool_use' && toolBlock.name === 'report_task_status') {
           console.log(`📊 Task status reported: ${toolBlock.name} (${toolBlock.id})`);
 
-          const { status, message, evidence } = toolBlock.input;
+          const { status, message, evidence } = toolBlock.input as {
+            status: 'completed' | 'failed' | 'needs_clarification';
+            message: string;
+            evidence?: any;
+            reasoning?: string;
+            next_step?: string;
+          };
           taskStatusReported = true;
           reportedTaskStatus = status;
 
