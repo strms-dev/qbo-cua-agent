@@ -120,7 +120,8 @@ export async function POST(request: NextRequest) {
   const { data: session, error: sessionError } = await supabase
     .from('chat_sessions')
     .insert({
-      company_id: null, // Batch API tasks don't require company context
+      status: 'active',
+      metadata: { batch_api: true, started_at: new Date().toISOString() }
     })
     .select('id')
     .single();
