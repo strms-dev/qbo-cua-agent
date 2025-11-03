@@ -73,10 +73,15 @@ export default function ChatPanel({
 
       setMessages(formattedMessages);
 
-      // Don't update browser session when loading history
-      // Browser session should only be activated when user actively sends messages in that session
-      // It will be set via metadata events from the chat API when messages are sent
-      // This prevents old browser sessions from persisting when user clicks "New Chat"
+      // Update browser session data if available (needed for batch API sessions accessed via webhook)
+      if (data.browserSession?.onkernelSessionId) {
+        console.log('🔗 Updating browser session from loaded data:', data.browserSession.onkernelSessionId);
+        onBrowserSessionChange(data.browserSession.onkernelSessionId);
+      }
+      if (data.browserSession?.liveViewUrl) {
+        console.log('🔗 Updating stream URL from loaded data:', data.browserSession.liveViewUrl);
+        onStreamUrlChange(data.browserSession.liveViewUrl);
+      }
 
       console.log('✅ Loaded', formattedMessages.length, 'messages for session', sid);
     } catch (error) {
