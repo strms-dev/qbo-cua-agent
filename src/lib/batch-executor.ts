@@ -179,6 +179,27 @@ export class BatchExecutor {
       throw new Error('No browser session available');
     }
 
+    // Check if CDP is still connected, reconnect if needed
+    // (CDP auto-disconnects after each task to save costs)
+    if (!this.browserSessionId.startsWith('demo-') &&
+        !this.browserSessionId.startsWith('test-')) {
+      try {
+        // Try to get session - throws if CDP disconnected
+        await this.onkernelClient.getSession(this.browserSessionId);
+        console.log(`✅ CDP already connected for task ${taskIndex + 1}`);
+      } catch (error) {
+        // Session not in cache - need to reconnect CDP
+        console.log(`🔌 CDP disconnected, reconnecting for task ${taskIndex + 1}...`);
+        try {
+          const reconnectResult = await this.onkernelClient.reconnectCDP(this.browserSessionId);
+          console.log(`✅ CDP reconnected: ${reconnectResult.status}`);
+        } catch (reconnectError: any) {
+          console.error(`❌ Failed to reconnect CDP:`, reconnectError.message);
+          throw new Error(`Failed to reconnect CDP for task ${taskIndex + 1}: ${reconnectError.message}`);
+        }
+      }
+    }
+
     // Merge global config + task-level config + batch metadata
     const mergedConfig = this.mergeConfigs(this.globalConfig, task.configOverrides, taskIndex);
 
