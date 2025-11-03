@@ -167,6 +167,7 @@ export async function POST(request: NextRequest) {
 
   // 5. Create task records for each task
   const taskRecords = body.tasks.map((task: TaskConfig, index: number) => ({
+    session_id: sessionId,
     batch_execution_id: batchExecutionId,
     task_index: index,
     user_message: task.message,
