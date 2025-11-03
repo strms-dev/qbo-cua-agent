@@ -184,10 +184,30 @@ export class BatchExecutor {
 
     // Build system prompt and initial message
     const systemPrompt = this.buildSystemPrompt();
+
+    // Build user message content with task_id tag
+    const userMessageContent = `<task_id>${taskId}</task_id>\n\n${task.message}`;
+
+    // Save user message to database (so it appears in UI)
+    try {
+      await supabase
+        .from('messages')
+        .insert({
+          session_id: this.sessionId,
+          role: 'user',
+          content: task.message, // Store original message without task_id tag
+          task_id: taskId
+        });
+      console.log(`✅ User message saved to database for task ${taskId}`);
+    } catch (error: any) {
+      console.error('⚠️ Failed to save user message:', error.message);
+      // Continue execution even if save fails
+    }
+
     const messages = [
       {
         role: 'user',
-        content: `<task_id>${taskId}</task_id>\n\n${task.message}`
+        content: userMessageContent // Use enhanced version with task_id for agent
       }
     ];
 
