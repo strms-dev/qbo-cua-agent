@@ -49,7 +49,30 @@ export async function GET(
       });
 
     } catch (onkernelError: any) {
-      // Session doesn't exist in local cache or on Onkernel
+      // Session not in memory - check database before giving up
+      // This handles case where browser was created in background (batch API)
+      console.log('ℹ️ Session not in memory cache, checking database...');
+
+      try {
+        const { data: browserSession, error: dbError } = await supabase
+          .from('browser_sessions')
+          .select('live_view_url, status, onkernel_session_id')
+          .eq('onkernel_session_id', sessionId)
+          .single();
+
+        if (!dbError && browserSession) {
+          console.log('✅ Found browser session in database:', sessionId);
+          return Response.json({
+            status: browserSession.status,
+            browserUrl: browserSession.live_view_url,
+            screenshot: null,
+          });
+        }
+      } catch (dbFallbackError) {
+        console.log('ℹ️ Session also not in database:', dbFallbackError);
+      }
+
+      // Session doesn't exist in local cache, database, or on Onkernel
       // This is expected when a session is stopped/destroyed
       if (onkernelError.message?.includes('404') || onkernelError.message?.includes('not found')) {
         console.log('ℹ️ Session not found (expected after stop):', sessionId);
