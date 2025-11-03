@@ -169,7 +169,7 @@ export async function POST(request: NextRequest) {
   const taskRecords = body.tasks.map((task: TaskConfig, index: number) => ({
     batch_execution_id: batchExecutionId,
     task_index: index,
-    message: task.message,
+    user_message: task.message,
     status: 'queued',
     config_overrides: task.configOverrides || {},
     destroy_browser_on_completion: task.destroyBrowserOnCompletion,
