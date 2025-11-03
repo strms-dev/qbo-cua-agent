@@ -250,7 +250,7 @@ export class BatchExecutor {
    */
   private async createBrowserSession(): Promise<string> {
     const session = await this.onkernelClient.createSession();
-    return session.kernelBrowserId;
+    return session.sessionId;
   }
 
   /**
