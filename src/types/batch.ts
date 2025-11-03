@@ -89,6 +89,12 @@ export interface WebhookPayload {
   /** Batch execution ID this task belongs to */
   batchExecutionId: string;
 
+  /** Chat session ID - allows identifying the session */
+  sessionId: string;
+
+  /** Direct URL to access the chat session UI */
+  sessionUrl: string;
+
   /** Individual task ID */
   taskId: string;
 

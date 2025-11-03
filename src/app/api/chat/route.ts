@@ -1386,6 +1386,8 @@ export async function samplingLoopWithStreaming(
               const webhookPayload = {
                 type: 'task_status' as const,
                 batchExecutionId: effectiveConfig.batchExecutionId || taskRecord?.batch_execution_id || '',
+                sessionId: sessionId,
+                sessionUrl: `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/sessions/${sessionId}/access`,
                 taskId: taskId,
                 taskIndex: effectiveConfig.taskIndex ?? taskRecord?.task_index ?? 0,
                 status: mappedStatus as 'completed' | 'failed' | 'paused',
