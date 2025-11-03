@@ -12,7 +12,7 @@
 
 import { supabase } from '@/lib/supabase';
 import { OnkernelClient, onkernelClient } from '@/lib/onkernel';
-import { samplingLoopWithStreaming } from '@/app/api/chat/route';
+import { samplingLoopWithStreaming, DEFAULT_SYSTEM_PROMPT } from '@/app/api/chat/route';
 import {
   TaskConfig,
   ConfigOverrides,
@@ -46,16 +46,16 @@ export interface BatchExecutorParams {
 }
 
 /**
- * Default configuration values (same as environment variable defaults)
+ * Default configuration values (reads from environment variables)
  */
 const DEFAULT_CONFIG: ExecutionConfig = {
-  agentMaxIterations: 35,
-  samplingLoopDelayMs: 100,
-  maxBase64Screenshots: 3,
-  keepRecentThinkingBlocks: 1,
-  thinkingBudgetTokens: 1024,
-  anthropicMaxTokens: 4096,
-  anthropicModel: 'claude-sonnet-4-20250514',
+  agentMaxIterations: parseInt(process.env.AGENT_MAX_ITERATIONS || '35'),
+  samplingLoopDelayMs: parseInt(process.env.SAMPLING_LOOP_DELAY_MS || '100'),
+  maxBase64Screenshots: parseInt(process.env.MAX_BASE64_SCREENSHOTS || '3'),
+  keepRecentThinkingBlocks: parseInt(process.env.KEEP_RECENT_THINKING_BLOCKS || '1'),
+  thinkingBudgetTokens: parseInt(process.env.THINKING_BUDGET_TOKENS || '1024'),
+  anthropicMaxTokens: parseInt(process.env.ANTHROPIC_MAX_TOKENS || '4096'),
+  anthropicModel: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514',
 };
 
 /**
@@ -332,33 +332,9 @@ export class BatchExecutor {
   }
 
   /**
-   * Build system prompt for agent (same as UI mode)
+   * Build system prompt for agent (uses DEFAULT_SYSTEM_PROMPT from route.ts)
    */
   private buildSystemPrompt(): string {
-    return `You are a helpful AI assistant with computer use capabilities. You can interact with a web browser to help users accomplish tasks.
-
-CAPABILITIES:
-- View screenshots of the current browser state
-- Click on elements (buttons, links, etc.)
-- Type text into input fields
-- Scroll pages
-- Navigate to URLs
-- Take screenshots to verify results
-- Report task completion status
-
-MEMORY MANAGEMENT:
-- Each task has a unique task_id that is provided to you in the user's message via <task_id> XML tags
-- Memory files are named EXACTLY using the task_id (e.g., task_id: "01e15647-d7e3-49ba-9705-96139222aed3" → memory file path: "/memories/01e15647-d7e3-49ba-9705-96139222aed3")
-- At the START of each task:
-  1. Extract the task_id from <task_id> tags in the user's message
-  2. Attempt to retrieve the memory file: memory.view("/memories/{task_id}")
-  3. If memory exists, review previous progress and continue from where you left off
-  4. If no memory exists (file not found error), this is a new task - create initial memory after first meaningful action
-- During task execution:
-  - Update memory after completing significant milestones
-  - Memory updates should be incremental - don't lose previous progress
-  - Use str_replace to update specific parts of memory without losing other data
-
-IMPORTANT: When you complete a task, fail to complete it, or need user clarification, you MUST use the report_task_status tool to formally report the outcome.`;
+    return DEFAULT_SYSTEM_PROMPT;
   }
 }

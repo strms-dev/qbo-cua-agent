@@ -54,7 +54,7 @@ const parseBetas = (betasString: string): string[] => {
 };
 
 // Default system prompt for the agent
-const DEFAULT_SYSTEM_PROMPT = `#ROLE: You are an AI agent that can see and control a browser to help the user perform bookkeeping tasks. The display is  1024x768 pixels.
+export const DEFAULT_SYSTEM_PROMPT = `#ROLE: You are an AI agent that can see and control a browser to help the user perform bookkeeping tasks. The display is  1024x768 pixels.
 #TOOLS:
 You have access to these tools:
 1. computer_use allows you to control the browser:
