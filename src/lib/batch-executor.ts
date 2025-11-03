@@ -291,7 +291,33 @@ export class BatchExecutor {
    */
   private async createBrowserSession(): Promise<string> {
     const session = await this.onkernelClient.createSession();
-    return session.sessionId;
+    const browserSessionId = session.sessionId;
+
+    // Insert browser session into database (required for CDP reconnection)
+    try {
+      const { error } = await supabase
+        .from('browser_sessions')
+        .insert({
+          chat_session_id: this.sessionId,
+          onkernel_session_id: browserSessionId,
+          status: 'active',
+          cdp_connected: true,
+          cdp_ws_url: session.cdpWsUrl || null,
+          live_view_url: session.liveViewUrl || null,
+          last_activity_at: new Date().toISOString(),
+        });
+
+      if (error) {
+        console.error('⚠️ Failed to store browser session in database:', error);
+        // Continue anyway - session is created, just not tracked in DB
+      } else {
+        console.log('✅ Browser session stored in database:', browserSessionId);
+      }
+    } catch (error) {
+      console.error('⚠️ Error storing browser session:', error);
+    }
+
+    return browserSessionId;
   }
 
   /**
