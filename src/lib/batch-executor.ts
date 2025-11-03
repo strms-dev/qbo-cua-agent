@@ -136,12 +136,26 @@ export class BatchExecutor {
 
         // Check if we should destroy browser after this task
         if (isLastTask && task.destroyBrowserOnCompletion && this.browserSessionId) {
-          console.log(`🗑️ Destroying browser (last task with destroy flag)`);
-          try {
-            await this.onkernelClient.destroySession(this.browserSessionId);
-            this.browserSessionId = null;
-          } catch (error: any) {
-            console.error(`⚠️ Failed to destroy browser:`, error.message);
+          // Query task status to check if it actually completed
+          const { data: taskData } = await supabase
+            .from('tasks')
+            .select('status')
+            .eq('id', taskId)
+            .single();
+
+          const taskStatus = taskData?.status;
+
+          // Only destroy browser if task completed successfully (not paused or failed)
+          if (taskStatus === 'completed') {
+            console.log(`🗑️ Destroying browser (last task completed with destroy flag)`);
+            try {
+              await this.onkernelClient.destroySession(this.browserSessionId);
+              this.browserSessionId = null;
+            } catch (error: any) {
+              console.error(`⚠️ Failed to destroy browser:`, error.message);
+            }
+          } else {
+            console.log(`⏸️ Browser NOT destroyed - task status is '${taskStatus}' (keeping browser for user interaction)`);
           }
         }
       }
