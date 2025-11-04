@@ -11,7 +11,7 @@ export async function GET(
 
     const { data: task, error } = await supabase
       .from('tasks')
-      .select('id, status, session_id, browser_session_id, current_iteration, max_iterations, started_at, completed_at, user_message, agent_status, agent_message, config_overrides')
+      .select('id, status, session_id, browser_session_id, batch_execution_id, current_iteration, max_iterations, started_at, completed_at, user_message, agent_status, agent_message, config_overrides')
       .eq('id', taskId)
       .single();
 
