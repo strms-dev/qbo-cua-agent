@@ -41,7 +41,10 @@ export default function ChatPanel({
   // Load messages when session changes
   useEffect(() => {
     if (sessionId && !sessionId.startsWith('fallback-')) {
-      loadSessionMessages(sessionId);
+      loadSessionMessages(sessionId).then(() => {
+        // After loading messages, check if there's an active task
+        checkAndResumeActiveTask(sessionId);
+      });
     } else {
       // Clear messages for new session
       setMessages([]);
@@ -88,6 +91,173 @@ export default function ChatPanel({
       console.error('❌ Failed to load session messages:', error);
     } finally {
       setIsLoadingHistory(false);
+    }
+  };
+
+  const checkAndResumeActiveTask = async (sid: string) => {
+    try {
+      console.log('🔍 Checking for active tasks in session:', sid);
+
+      // Fetch session data which includes task information
+      const response = await fetch(`/api/sessions/${sid}`);
+      if (!response.ok) return;
+
+      const data = await response.json();
+
+      // Check if any messages have a task_id (from metadata in messages table)
+      const messagesWithTasks = data.messages?.filter((msg: any) => msg.metadata?.task_id) || [];
+      if (messagesWithTasks.length === 0) {
+        console.log('ℹ️ No tasks found in session');
+        return;
+      }
+
+      // Get the most recent task ID
+      const lastTaskId = messagesWithTasks[messagesWithTasks.length - 1].metadata.task_id;
+      console.log('🔍 Found task ID:', lastTaskId);
+
+      // Check task status from database
+      const taskResponse = await fetch(`/api/tasks/${lastTaskId}`);
+      if (!taskResponse.ok) {
+        console.log('⚠️ Task not found in database');
+        return;
+      }
+
+      const taskData = await taskResponse.json();
+      console.log('📊 Task status:', taskData.status);
+
+      // If task is running, set up for SSE connection
+      if (taskData.status === 'running') {
+        console.log('🔄 Found running task, setting up SSE connection:', lastTaskId);
+        setCurrentTaskId(lastTaskId);
+        setTaskStatus('running');
+        setIsLoading(true);
+        onAgentActiveChange(true);
+
+        // Reconnect to SSE stream for this task
+        await connectToRunningTask(lastTaskId, sid);
+      } else if (taskData.status === 'paused') {
+        console.log('⏸️ Task is paused, setting task status indicator');
+        setCurrentTaskId(lastTaskId);
+        setTaskStatus('paused');
+      }
+    } catch (error) {
+      console.error('❌ Failed to check for active tasks:', error);
+    }
+  };
+
+  const connectToRunningTask = async (taskId: string, sid: string) => {
+    try {
+      console.log('🔌 Connecting to running task:', taskId);
+
+      // Call the chat API with continueAgent=true to resume execution and get SSE stream
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: messages, // Use already loaded messages
+          sessionId: sid,
+          browserSessionId: browserSessionId,
+          continueAgent: true,
+          stream: true,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const contentType = response.headers.get('content-type');
+      if (!contentType?.includes('text/event-stream')) {
+        console.log('⚠️ Response is not SSE stream');
+        return;
+      }
+
+      console.log('📡 Receiving SSE stream for running task...');
+
+      // Process SSE stream (same logic as in sendMessage)
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      if (!reader) {
+        throw new Error('No reader available for stream');
+      }
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          console.log('✅ SSE stream completed');
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = JSON.parse(line.substring(6));
+
+            // Handle SSE events (same as sendMessage)
+            switch (data.type) {
+              case 'metadata':
+                if (data.browserSessionId && data.browserSessionId !== browserSessionId) {
+                  onBrowserSessionChange(data.browserSessionId);
+                }
+                if (data.streamUrl) {
+                  console.log('🔗 Stream URL received:', data.streamUrl);
+                  onStreamUrlChange(data.streamUrl);
+                }
+                if (data.taskId) {
+                  console.log('📋 Task ID received:', data.taskId);
+                  setCurrentTaskId(data.taskId);
+                }
+                break;
+
+              case 'message':
+                const agentMessage = {
+                  id: data.message.id || (Date.now() + Math.random()).toString(),
+                  role: data.message.role,
+                  content: data.message.content,
+                  thinking: data.message.thinking,
+                  toolCalls: data.message.toolCalls || []
+                };
+                console.log('💬 Adding message in real-time:', agentMessage.content.substring(0, 100));
+                setMessages(prev => [...prev, agentMessage]);
+                break;
+
+              case 'task_status':
+                console.log('📊 Task status update:', data.status);
+                setTaskStatus(data.status);
+                break;
+
+              case 'done':
+                console.log('✅ Task completed');
+                setIsLoading(false);
+                onAgentActiveChange(false);
+                setTaskStatus('completed');
+                break;
+
+              case 'error':
+                console.error('❌ Task error:', data.message);
+                const errorMsg = {
+                  id: (Date.now() + Math.random()).toString(),
+                  role: 'assistant',
+                  content: data.message
+                };
+                setMessages(prev => [...prev, errorMsg]);
+                setIsLoading(false);
+                onAgentActiveChange(false);
+                setTaskStatus('failed');
+                break;
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('❌ Failed to connect to running task:', error);
+      setIsLoading(false);
+      onAgentActiveChange(false);
     }
   };
 
