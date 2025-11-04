@@ -1,15 +1,26 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import ChatPanel from './ChatPanel';
 import BrowserPanel from './BrowserPanel';
 import ThreadHistory from './ThreadHistory';
 
 export default function STRMSAgent() {
+  const searchParams = useSearchParams();
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [browserSessionId, setBrowserSessionId] = useState<string | null>(null);
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [agentActive, setAgentActive] = useState<boolean>(false);
+
+  // Load session from URL query parameter on mount
+  useEffect(() => {
+    const sessionIdFromUrl = searchParams.get('sessionId');
+    if (sessionIdFromUrl) {
+      console.log('🔗 Loading session from URL:', sessionIdFromUrl);
+      setCurrentSessionId(sessionIdFromUrl);
+    }
+  }, [searchParams]);
 
   const handleSessionSelect = (sessionId: string) => {
     setCurrentSessionId(sessionId);
