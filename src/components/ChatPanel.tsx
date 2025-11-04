@@ -29,6 +29,7 @@ export default function ChatPanel({
   const [expandedThinking, setExpandedThinking] = useState<Record<string, boolean>>({});
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const [taskStatus, setTaskStatus] = useState<string | null>(null);
+  const [batchContext, setBatchContext] = useState<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const toggleThinking = (messageId: string) => {
@@ -125,7 +126,45 @@ export default function ChatPanel({
       const taskData = await taskResponse.json();
       console.log('📊 Task status:', taskData.status);
 
-      // If task is running, set up for SSE connection
+      // Check if task is part of a batch execution
+      if (taskData.batch_execution_id) {
+        console.log('📦 Task is part of batch execution:', taskData.batch_execution_id);
+
+        // Fetch batch execution status
+        const batchResponse = await fetch(`/api/batch-executions/${taskData.batch_execution_id}/status`);
+        if (batchResponse.ok) {
+          const batchData = await batchResponse.json();
+          console.log('📦 Batch status:', batchData);
+
+          // Store batch context for UI
+          setBatchContext({
+            batchExecutionId: batchData.batchExecution.id,
+            totalTasks: batchData.batchExecution.totalTasks,
+            completedTasks: batchData.batchExecution.completedTasks,
+            tasks: batchData.tasks,
+            currentTaskId: lastTaskId,
+          });
+
+          // If there's an active task in the batch (different from current one or same if running/paused)
+          if (batchData.hasActiveTask && batchData.activeTask) {
+            console.log('🔄 Found active task in batch:', batchData.activeTask.id);
+            setCurrentTaskId(batchData.activeTask.id);
+            setTaskStatus(batchData.activeTask.status);
+
+            if (batchData.activeTask.status === 'running') {
+              setIsLoading(true);
+              onAgentActiveChange(true);
+              // Reconnect to SSE stream for the active task
+              await connectToRunningTask(batchData.activeTask.id, sid);
+            } else if (batchData.activeTask.status === 'paused') {
+              console.log('⏸️ Batch task is paused');
+            }
+            return;
+          }
+        }
+      }
+
+      // No batch or no active task in batch - handle single task
       if (taskData.status === 'running') {
         console.log('🔄 Found running task, setting up SSE connection:', lastTaskId);
         setCurrentTaskId(lastTaskId);
@@ -483,6 +522,7 @@ export default function ChatPanel({
     onStreamUrlChange(null);
     setCurrentTaskId(null);
     setTaskStatus(null);
+    setBatchContext(null);
   };
 
   const handleStop = async () => {
@@ -849,6 +889,51 @@ export default function ChatPanel({
                 </span>
               )}
             </div>
+            {/* Batch Execution Indicator */}
+            {batchContext && (
+              <div className="mt-2 text-xs text-gray-600 bg-purple-50 border border-purple-200 rounded px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-purple-700">📦 Batch Execution</span>
+                  <span className="text-gray-500">|</span>
+                  <span>{batchContext.completedTasks} / {batchContext.totalTasks} tasks completed</span>
+                </div>
+                <div className="mt-1 flex items-center gap-2 flex-wrap">
+                  {batchContext.tasks.map((task: any, index: number) => (
+                    <div key={task.id} className="flex items-center gap-1">
+                      <span className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-xs font-medium ${
+                        task.id === batchContext.currentTaskId
+                          ? 'bg-blue-500 text-white ring-2 ring-blue-300'
+                          : task.status === 'completed'
+                          ? 'bg-green-500 text-white'
+                          : task.status === 'running'
+                          ? 'bg-blue-400 text-white animate-pulse'
+                          : task.status === 'paused'
+                          ? 'bg-yellow-400 text-white'
+                          : task.status === 'failed'
+                          ? 'bg-red-500 text-white'
+                          : 'bg-gray-300 text-gray-600'
+                      }`}>
+                        {index + 1}
+                      </span>
+                      {task.status === 'completed' && <span className="text-green-600">✓</span>}
+                      {task.status === 'running' && <span className="text-blue-600">▶</span>}
+                      {task.status === 'paused' && <span className="text-yellow-600">⏸</span>}
+                      {task.status === 'failed' && <span className="text-red-600">✗</span>}
+                    </div>
+                  ))}
+                </div>
+                {batchContext.currentTaskId && (
+                  <div className="mt-1 text-xs text-gray-500">
+                    Viewing messages from Task {batchContext.tasks.findIndex((t: any) => t.id === batchContext.currentTaskId) + 1}
+                    {batchContext.tasks.find((t: any) => t.status === 'running' || t.status === 'paused') && (
+                      <span className="ml-1">
+                        • {batchContext.tasks.find((t: any) => t.status === 'running') ? 'Another task is running' : 'A task is paused'}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           {/* New Chat button - only show when reviewing a thread */}
           {sessionId && messages.length > 0 && !isLoading && (
