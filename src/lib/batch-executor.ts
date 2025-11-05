@@ -231,7 +231,10 @@ export class BatchExecutor {
           session_id: this.sessionId,
           role: 'user',
           content: task.message, // Store original message without task_id tag
-          task_id: taskId
+          metadata: {
+            task_id: taskId,
+            batch_execution_id: this.batchExecutionId
+          }
         });
       console.log(`✅ User message saved to database for task ${taskId}`);
     } catch (error: any) {
