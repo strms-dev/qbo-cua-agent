@@ -12,7 +12,7 @@ export async function GET(
     // Fetch batch execution details
     const { data: batchExecution, error: batchError } = await supabase
       .from('batch_executions')
-      .select('id, session_id, status, total_tasks, completed_tasks, started_at, completed_at, browser_session_id')
+      .select('id, session_id, status, task_count, completed_count, started_at, completed_at, browser_session_id')
       .eq('id', batchId)
       .single();
 
@@ -62,7 +62,7 @@ export async function GET(
         id: batchExecution.id,
         sessionId: batchExecution.session_id,
         status: overallStatus,
-        totalTasks: batchExecution.total_tasks,
+        totalTasks: batchExecution.task_count,
         completedTasks: tasks?.filter(t => t.status === 'completed').length || 0,
         startedAt: batchExecution.started_at,
         completedAt: batchExecution.completed_at,
