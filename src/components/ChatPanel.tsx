@@ -145,6 +145,28 @@ export default function ChatPanel({
             currentTaskId: lastTaskId,
           });
 
+          // Load browser session from batch execution
+          if (batchData.batchExecution.browserSessionId) {
+            console.log('🌐 Loading browser session from batch:', batchData.batchExecution.browserSessionId);
+
+            try {
+              const browserStatusResponse = await fetch(`/api/browser/${batchData.batchExecution.browserSessionId}/status`);
+              if (browserStatusResponse.ok) {
+                const browserStatus = await browserStatusResponse.json();
+                console.log('✅ Browser session loaded:', browserStatus);
+
+                // Update parent with browser session info
+                onBrowserSessionChange(batchData.batchExecution.browserSessionId);
+                if (browserStatus.browserUrl) {
+                  onStreamUrlChange(browserStatus.browserUrl);
+                  console.log('🔗 Browser live view URL set:', browserStatus.browserUrl);
+                }
+              }
+            } catch (error) {
+              console.error('⚠️ Failed to load browser session:', error);
+            }
+          }
+
           // If there's an active task in the batch (different from current one or same if running/paused)
           if (batchData.hasActiveTask && batchData.activeTask) {
             console.log('🔄 Found active task in batch:', batchData.activeTask.id);
