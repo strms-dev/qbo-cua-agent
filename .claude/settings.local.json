@@ -34,7 +34,9 @@
       "Bash(git push:*)",
       "mcp__supabase__apply_migration",
       "Bash(mcp list-tools:*)",
-      "Bash(mcp list-resources:*)"
+      "Bash(mcp list-resources:*)",
+      "Bash(node -e:*)",
+      "Bash(git log:*)"
     ],
     "deny": [],
     "ask": []

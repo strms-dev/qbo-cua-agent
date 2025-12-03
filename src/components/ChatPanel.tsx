@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 // import { useChat } from 'ai/react';
 import { Send, Bot, User, Camera, AlertTriangle, CheckCircle, XCircle, Square } from 'lucide-react';
+import { supabaseBrowser } from '@/lib/supabase-browser';
 
 interface ChatPanelProps {
   sessionId: string | null;
@@ -30,6 +31,7 @@ export default function ChatPanel({
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const [taskStatus, setTaskStatus] = useState<string | null>(null);
   const [batchContext, setBatchContext] = useState<any>(null);
+  const [isStreamingSSE, setIsStreamingSSE] = useState(false); // Track when SSE is active to pause Realtime
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const toggleThinking = (messageId: string) => {
@@ -51,6 +53,64 @@ export default function ChatPanel({
       setMessages([]);
     }
   }, [sessionId]);
+
+  // Helper to format database messages for UI display
+  const formatMessageFromDB = (dbMessage: any) => ({
+    id: dbMessage.id,
+    role: dbMessage.role,
+    content: dbMessage.content,
+    thinking: dbMessage.thinking_content || undefined,
+    toolCalls: dbMessage.tool_calls || [],
+    timestamp: dbMessage.created_at,
+  });
+
+  // Subscribe to new messages via Supabase Realtime for batch API executions
+  // Skip when SSE is active to prevent duplicate messages
+  useEffect(() => {
+    if (!sessionId || sessionId.startsWith('fallback-')) return;
+
+    // Skip Realtime when SSE is active - SSE handles message delivery
+    if (isStreamingSSE) {
+      console.log('🔕 Skipping Realtime subscription - SSE is active');
+      return;
+    }
+
+    console.log('🔔 Setting up Supabase Realtime subscription for session:', sessionId);
+
+    const channel = supabaseBrowser
+      .channel(`messages:${sessionId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `session_id=eq.${sessionId}`,
+        },
+        (payload) => {
+          const newMessage = payload.new as any;
+          console.log('📨 Realtime message received:', newMessage.id, newMessage.role);
+
+          // Check if message already exists (avoid duplicates)
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === newMessage.id)) {
+              console.log('⏭️ Skipping duplicate message:', newMessage.id);
+              return prev;
+            }
+            console.log('✅ Adding message from Realtime:', newMessage.id);
+            return [...prev, formatMessageFromDB(newMessage)];
+          });
+        }
+      )
+      .subscribe((status) => {
+        console.log('🔔 Realtime subscription status:', status);
+      });
+
+    return () => {
+      console.log('🔕 Cleaning up Realtime subscription for session:', sessionId);
+      supabaseBrowser.removeChannel(channel);
+    };
+  }, [sessionId, isStreamingSSE]);
 
   const loadSessionMessages = async (sid: string) => {
     setIsLoadingHistory(true);
@@ -189,6 +249,29 @@ export default function ChatPanel({
       // No batch or no active task in batch - handle single task
       if (taskData.status === 'running') {
         console.log('🔄 Found running task, setting up SSE connection:', lastTaskId);
+
+        // Load fresh browser session data before reconnecting (similar to batch flow)
+        if (browserSessionId) {
+          console.log('🌐 Refreshing browser session before reconnection:', browserSessionId);
+
+          try {
+            const browserStatusResponse = await fetch(`/api/browser/${browserSessionId}/status`);
+            if (browserStatusResponse.ok) {
+              const browserStatus = await browserStatusResponse.json();
+              console.log('✅ Browser session refreshed:', browserStatus);
+
+              // Update parent with current browser session info
+              onBrowserSessionChange(browserSessionId);
+              if (browserStatus.browserUrl) {
+                onStreamUrlChange(browserStatus.browserUrl);
+                console.log('🔗 Browser live view URL updated:', browserStatus.browserUrl);
+              }
+            }
+          } catch (error) {
+            console.error('⚠️ Failed to refresh browser session:', error);
+          }
+        }
+
         setCurrentTaskId(lastTaskId);
         setTaskStatus('running');
         setIsLoading(true);
@@ -209,6 +292,7 @@ export default function ChatPanel({
   const connectToRunningTask = async (taskId: string, sid: string) => {
     try {
       console.log('🔌 Connecting to running task:', taskId);
+      setIsStreamingSSE(true); // Pause Realtime subscription during SSE streaming
 
       // Call the chat API with continueAgent=true to resume execution and get SSE stream
       const response = await fetch('/api/chat', {
@@ -248,6 +332,7 @@ export default function ChatPanel({
         const { done, value } = await reader.read();
         if (done) {
           console.log('✅ SSE stream completed');
+          setIsStreamingSSE(false); // Re-enable Realtime subscription
           break;
         }
 
@@ -318,6 +403,7 @@ export default function ChatPanel({
     } catch (error) {
       console.error('❌ Failed to connect to running task:', error);
       setIsLoading(false);
+      setIsStreamingSSE(false); // Re-enable Realtime subscription
       onAgentActiveChange(false);
     }
   };
@@ -338,6 +424,7 @@ export default function ChatPanel({
 
   const sendMessage = async (messageHistory: any[], continueAgent = false) => {
     setIsLoading(true);
+    setIsStreamingSSE(true); // Pause Realtime subscription during SSE streaming
     onAgentActiveChange(true); // Notify that agent is starting work
 
     try {
@@ -382,6 +469,7 @@ export default function ChatPanel({
 
           if (done) {
             console.log('✅ Stream completed');
+            setIsStreamingSSE(false); // Re-enable Realtime subscription
             break;
           }
 
@@ -501,6 +589,7 @@ export default function ChatPanel({
         setMessages(prev => [...prev, aiMessage]);
 
         setIsLoading(false);
+        setIsStreamingSSE(false); // Re-enable Realtime subscription
         onAgentActiveChange(false);
       }
 
@@ -515,6 +604,7 @@ export default function ChatPanel({
       };
       setMessages(prev => [...prev, errorMessage]);
       setIsLoading(false);
+      setIsStreamingSSE(false); // Re-enable Realtime subscription
       onAgentActiveChange(false); // Notify that agent stopped due to error
     }
   };

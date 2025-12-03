@@ -217,8 +217,17 @@ export class BatchExecutor {
     // Merge global config + task-level config + batch metadata
     const mergedConfig = this.mergeConfigs(this.globalConfig, task.configOverrides, taskIndex);
 
+    // Debug: Log config merge to diagnose iteration count issues
+    console.log('🔧 Config Debug for Task', taskIndex + 1, ':', {
+      globalConfig: JSON.stringify(this.globalConfig),
+      taskConfigOverrides: JSON.stringify(task.configOverrides),
+      mergedAgentMaxIterations: mergedConfig.agentMaxIterations,
+      allMergedConfig: JSON.stringify(mergedConfig, null, 2)
+    });
+
     // Build system prompt and initial message
-    const systemPrompt = this.buildSystemPrompt();
+    // Use custom system prompt from config override if provided
+    const systemPrompt = this.buildSystemPrompt(mergedConfig.systemPrompt);
 
     // Build user message content with task_id tag
     const userMessageContent = `<task_id>${taskId}</task_id>\n\n${task.message}`;
@@ -300,6 +309,7 @@ export class BatchExecutor {
       webhookSecret: this.webhookSecret,
       batchExecutionId: this.batchExecutionId,
       taskIndex: taskIndex,
+      systemPrompt: merged.SYSTEM_PROMPT, // Custom system prompt override
     };
   }
 
@@ -396,9 +406,10 @@ export class BatchExecutor {
   }
 
   /**
-   * Build system prompt for agent (uses DEFAULT_SYSTEM_PROMPT from route.ts)
+   * Build system prompt for agent
+   * Uses custom prompt from config override if provided, otherwise DEFAULT_SYSTEM_PROMPT
    */
-  private buildSystemPrompt(): string {
-    return DEFAULT_SYSTEM_PROMPT;
+  private buildSystemPrompt(customPrompt?: string): string {
+    return customPrompt || DEFAULT_SYSTEM_PROMPT;
   }
 }

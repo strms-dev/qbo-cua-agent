@@ -18,6 +18,9 @@ import {
   TaskConfig
 } from '@/types/batch';
 
+// Default max iterations from environment (same as chat route)
+const AGENT_MAX_ITERATIONS = parseInt(process.env.AGENT_MAX_ITERATIONS || '35', 10);
+
 /**
  * API Key authentication middleware
  */
@@ -166,15 +169,24 @@ export async function POST(request: NextRequest) {
   console.log(`✅ Created batch execution: ${batchExecutionId}`);
 
   // 5. Create task records for each task
-  const taskRecords = body.tasks.map((task: TaskConfig, index: number) => ({
-    session_id: sessionId,
-    batch_execution_id: batchExecutionId,
-    task_index: index,
-    user_message: task.message,
-    status: 'queued',
-    config_overrides: task.configOverrides || {},
-    destroy_browser_on_completion: task.destroyBrowserOnCompletion,
-  }));
+  // Compute effective max_iterations for each task (task-level > global > env default)
+  const taskRecords = body.tasks.map((task: TaskConfig, index: number) => {
+    const effectiveMaxIterations =
+      task.configOverrides?.AGENT_MAX_ITERATIONS ??
+      body.globalConfigOverrides?.AGENT_MAX_ITERATIONS ??
+      AGENT_MAX_ITERATIONS;
+
+    return {
+      session_id: sessionId,
+      batch_execution_id: batchExecutionId,
+      task_index: index,
+      user_message: task.message,
+      status: 'queued',
+      config_overrides: task.configOverrides || {},
+      destroy_browser_on_completion: task.destroyBrowserOnCompletion,
+      max_iterations: effectiveMaxIterations, // Store effective value for task resumption
+    };
+  });
 
   const { data: createdTasks, error: tasksError } = await supabase
     .from('tasks')

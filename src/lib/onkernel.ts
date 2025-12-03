@@ -1,20 +1,38 @@
 import { Kernel } from '@onkernel/sdk';
-import { chromium, Browser, Page } from 'playwright';
+import { chromium, Browser, Page, CDPSession, BrowserContext } from 'playwright';
 import { supabase } from './supabase';
+
+// Download directory used by OnKernel browser
+const DOWNLOAD_DIR = '/tmp/downloads';
+
+// Interface for tracking downloaded files
+export interface DownloadInfo {
+  filename: string;
+  path: string;
+  size?: number;
+  status: 'started' | 'in_progress' | 'completed' | 'failed';
+  progress?: number;
+  downloadedAt: Date;
+  guid?: string; // CDP download GUID
+}
 
 interface BrowserSession {
   kernelBrowserId: string;
   browser: Browser;
-  page: Page;
+  page: Page;           // Current active page (auto-updated on tab changes)
+  pages: Page[];        // Stack of pages (most recent at end) for tab management
+  context: BrowserContext; // Browser context for page event listeners
   liveViewUrl: string;
   cdpWsUrl: string;
   createdAt: Date;
   intentionalDisconnect?: boolean; // Track intentional CDP disconnections to avoid false warnings
+  cdpClient?: CDPSession; // CDP session for download listeners
 }
 
 export class OnkernelClient {
   private kernel: Kernel | null = null;
   private activeSessions: Map<string, BrowserSession> = new Map();
+  private downloadTracker: Map<string, DownloadInfo[]> = new Map(); // Track downloads per session
   private profileName: string = 'qbo-auth';
   private useProfiles: boolean = false; // Set to true when you upgrade to startup/enterprise plan
   private usePersistence: boolean = false; // Enable browser persistence with session lifecycle
@@ -64,6 +82,257 @@ export class OnkernelClient {
     return this.kernel;
   }
 
+  /**
+   * Set up page event listeners for multi-tab handling
+   * - Automatically switches to new tabs when they open
+   * - Switches back to previous tab when current tab closes
+   * - Only handles new tabs, not popup windows
+   */
+  private setupPageListeners(session: BrowserSession, context: BrowserContext): void {
+    const sessionId = session.kernelBrowserId;
+    console.log('🔄 Setting up page listeners for session:', sessionId);
+
+    // Listen for new pages (tabs)
+    context.on('page', async (newPage: Page) => {
+      console.log('📑 New page event detected for session:', sessionId);
+
+      try {
+        // Wait for page to be ready
+        await newPage.waitForLoadState('domcontentloaded').catch(() => {
+          console.log('⚠️ Page load state timeout (continuing anyway)');
+        });
+
+        const newUrl = newPage.url();
+        console.log('📑 New tab opened:', newUrl);
+
+        // Add to pages stack and switch to it
+        session.pages.push(newPage);
+        session.page = newPage;
+        console.log('✅ Switched to new tab. Total tabs:', session.pages.length);
+
+        // Listen for this page closing
+        newPage.on('close', () => {
+          console.log('📑 Tab closed:', newUrl);
+
+          // Remove from pages stack
+          const index = session.pages.indexOf(newPage);
+          if (index > -1) {
+            session.pages.splice(index, 1);
+            console.log('✅ Tab removed from stack. Remaining tabs:', session.pages.length);
+          }
+
+          // If this was the active page, switch to previous
+          if (session.page === newPage && session.pages.length > 0) {
+            session.page = session.pages[session.pages.length - 1];
+            console.log('✅ Switched back to previous tab:', session.page.url());
+          } else if (session.pages.length === 0) {
+            console.log('⚠️ All tabs closed - no active page');
+          }
+        });
+      } catch (error) {
+        console.error('⚠️ Error handling new page event:', error);
+      }
+    });
+
+    console.log('✅ Page listeners attached for session:', sessionId);
+  }
+
+  /**
+   * Set up close listeners for existing pages (used during reconnection)
+   */
+  private setupPageCloseListener(session: BrowserSession, page: Page): void {
+    const pageUrl = page.url();
+
+    page.on('close', () => {
+      console.log('📑 Tab closed:', pageUrl);
+
+      // Remove from pages stack
+      const index = session.pages.indexOf(page);
+      if (index > -1) {
+        session.pages.splice(index, 1);
+        console.log('✅ Tab removed from stack. Remaining tabs:', session.pages.length);
+      }
+
+      // If this was the active page, switch to previous
+      if (session.page === page && session.pages.length > 0) {
+        session.page = session.pages[session.pages.length - 1];
+        console.log('✅ Switched back to previous tab:', session.page.url());
+      } else if (session.pages.length === 0) {
+        console.log('⚠️ All tabs closed - no active page');
+      }
+    });
+  }
+
+  /**
+   * Check if a page is responsive by attempting a quick operation
+   * Returns true if page responds within timeout, false otherwise
+   */
+  private async isPageResponsive(page: Page, timeoutMs: number = 3000): Promise<boolean> {
+    if (page.isClosed()) {
+      return false;
+    }
+
+    try {
+      // Quick URL check - fast operation to verify page is responsive
+      await Promise.race([
+        page.url(), // This should be instant for a responsive page
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Page unresponsive')), timeoutMs)
+        )
+      ]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Normalize a single key to Playwright format (case-insensitive)
+   */
+  private normalizeKey(key: string): string {
+    const keyLower = key.toLowerCase().trim();
+
+    const keyMap: { [key: string]: string } = {
+      // Modifier keys
+      'ctrl': 'Control',
+      'control': 'Control',
+      'shift': 'Shift',
+      'alt': 'Alt',
+      'meta': 'Meta',
+      'cmd': 'Meta',
+      'command': 'Meta',
+      'win': 'Meta',
+      'windows': 'Meta',
+
+      // Common keys
+      'return': 'Enter',
+      'enter': 'Enter',
+      'esc': 'Escape',
+      'escape': 'Escape',
+      'backspace': 'Backspace',
+      'tab': 'Tab',
+      'delete': 'Delete',
+      'del': 'Delete',
+      'space': ' ',
+      ' ': ' ',
+
+      // Arrow keys
+      'up': 'ArrowUp',
+      'down': 'ArrowDown',
+      'left': 'ArrowLeft',
+      'right': 'ArrowRight',
+      'arrowup': 'ArrowUp',
+      'arrowdown': 'ArrowDown',
+      'arrowleft': 'ArrowLeft',
+      'arrowright': 'ArrowRight',
+
+      // Navigation keys
+      'home': 'Home',
+      'end': 'End',
+      'pageup': 'PageUp',
+      'pagedown': 'PageDown',
+      'insert': 'Insert',
+    };
+
+    return keyMap[keyLower] || key;
+  }
+
+  /**
+   * Parse and normalize key combinations (e.g., "ctrl+a" → "Control+a")
+   */
+  private parseKeyInput(input: string): string {
+    if (input.includes('+')) {
+      return input
+        .split('+')
+        .map(k => this.normalizeKey(k))
+        .join('+');
+    }
+    return this.normalizeKey(input);
+  }
+
+  /**
+   * Attempt to take screenshot with fallback to other pages
+   * Returns Buffer on success, null on total failure
+   */
+  private async attemptScreenshotWithFallback(
+    session: BrowserSession,
+    primaryPage: Page
+  ): Promise<Buffer | null> {
+    const SCREENSHOT_TIMEOUT = 5000; // 5 seconds - fail fast
+
+    // First, try the primary page
+    if (await this.isPageResponsive(primaryPage)) {
+      try {
+        const buffer = await Promise.race([
+          primaryPage.screenshot({ type: 'png', fullPage: false }),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Screenshot timeout')), SCREENSHOT_TIMEOUT)
+          )
+        ]);
+        console.log('✅ Screenshot taken from primary page');
+        return buffer as Buffer;
+      } catch (error) {
+        console.warn('⚠️ Primary page screenshot failed:', error);
+      }
+    } else {
+      console.warn('⚠️ Primary page is unresponsive or closed');
+    }
+
+    // Fallback: try other pages in the session
+    console.log('🔄 Attempting screenshot from alternative pages...');
+    const availablePages = session.pages.filter(p => p !== primaryPage);
+
+    for (const fallbackPage of availablePages.reverse()) { // Try most recent first
+      if (await this.isPageResponsive(fallbackPage)) {
+        try {
+          const buffer = await Promise.race([
+            fallbackPage.screenshot({ type: 'png', fullPage: false }),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('Screenshot timeout')), SCREENSHOT_TIMEOUT)
+            )
+          ]);
+
+          // Update session's active page to the responsive one
+          session.page = fallbackPage;
+          console.log('✅ Screenshot taken from fallback page, updated active page');
+          return buffer as Buffer;
+        } catch (error) {
+          console.warn('⚠️ Fallback page screenshot failed:', error);
+        }
+      }
+    }
+
+    // Last resort: try to get fresh pages from context
+    console.log('🔄 Refreshing page list from context...');
+    try {
+      const freshPages = session.context.pages();
+      for (const freshPage of freshPages.reverse()) {
+        if (!freshPage.isClosed()) {
+          try {
+            const buffer = await Promise.race([
+              freshPage.screenshot({ type: 'png', fullPage: false }),
+              new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error('Screenshot timeout')), SCREENSHOT_TIMEOUT)
+              )
+            ]);
+
+            // Update session state
+            session.page = freshPage;
+            session.pages = freshPages;
+            console.log('✅ Screenshot taken from fresh context page');
+            return buffer as Buffer;
+          } catch (error) {
+            console.warn('⚠️ Fresh page screenshot failed:', error);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('❌ Failed to refresh pages from context:', error);
+    }
+
+    return null;
+  }
+
   async createSession(sessionId?: string) {
     console.log('🔄 Creating new browser session with Onkernel...');
     const startTime = Date.now();
@@ -79,7 +348,12 @@ export class OnkernelClient {
         viewport: {
           width: 1024,
           height: 768
-        }
+        },
+        extensions: [
+          {
+            id: "h30r1lrhdw4oomdvglcx0nz9"
+          }
+        ]
       };
 
       // Only use profiles if enabled (requires startup/enterprise plan)
@@ -252,11 +526,13 @@ export class OnkernelClient {
 
       console.log('✅ Playwright connected successfully');
 
-      // Store session
+      // Store session with multi-tab support
       const session: BrowserSession = {
         kernelBrowserId,
         browser,
         page,
+        pages: [page], // Initialize pages stack with first page
+        context, // Store context for page event listeners
         liveViewUrl,
         cdpWsUrl: cdpUrl,
         createdAt: new Date(),
@@ -265,6 +541,18 @@ export class OnkernelClient {
       this.activeSessions.set(kernelBrowserId, session);
       console.log('💾 Session stored in activeSessions Map with key:', kernelBrowserId);
       console.log('📊 Total active sessions:', this.activeSessions.size);
+
+      // Set up page listeners for multi-tab handling
+      this.setupPageListeners(session, context);
+      this.setupPageCloseListener(session, page);
+
+      // Set up download listeners for file download tracking
+      try {
+        await this.setupDownloadListeners(kernelBrowserId);
+      } catch (error) {
+        console.error('⚠️ Failed to setup download listeners (non-fatal):', error);
+        // Non-fatal - continue without download tracking
+      }
 
       // Return session details including CDP URLs for database storage
       return {
@@ -307,10 +595,13 @@ export class OnkernelClient {
         throw new Error(`Session ${sessionId} not found in active sessions`);
       }
 
-      const screenshotBuffer = await session.page.screenshot({
-        type: 'png',
-        fullPage: false, // Only visible viewport
-      });
+      // Try primary page first with validation and fallback to other pages
+      const primaryPage = session.page;
+      const screenshotBuffer = await this.attemptScreenshotWithFallback(session, primaryPage);
+
+      if (!screenshotBuffer) {
+        throw new Error('Failed to take screenshot from any available page');
+      }
 
       const base64Image = screenshotBuffer.toString('base64');
       const imageUrl = `data:image/png;base64,${base64Image}`;
@@ -381,22 +672,10 @@ export class OnkernelClient {
           if (!action.text) {
             throw new Error('key requires text parameter');
           }
-          // Map common key names to Playwright key names
-          const keyMap: { [key: string]: string } = {
-            'Return': 'Enter',
-            'return': 'Enter',
-            'Backspace': 'Backspace',
-            'Tab': 'Tab',
-            'Escape': 'Escape',
-            'Delete': 'Delete',
-            'ArrowUp': 'ArrowUp',
-            'ArrowDown': 'ArrowDown',
-            'ArrowLeft': 'ArrowLeft',
-            'ArrowRight': 'ArrowRight',
-          };
-          const key = keyMap[action.text] || action.text;
-          await page.keyboard.press(key);
-          console.log('✅ Pressed key:', key);
+          // Normalize key input (handles combinations like "ctrl+a" → "Control+a")
+          const normalizedKey = this.parseKeyInput(action.text);
+          await page.keyboard.press(normalizedKey);
+          console.log('✅ Pressed key:', normalizedKey, '(original:', action.text, ')');
           return { success: true };
 
         case 'scroll':
@@ -575,6 +854,9 @@ export class OnkernelClient {
         this.activeSessions.delete(sessionId);
         console.log('✅ Session removed from cache');
       }
+
+      // Clear download tracker for this session
+      this.clearDownloads(sessionId);
 
       // Update database
       try {
@@ -771,25 +1053,57 @@ export class OnkernelClient {
       }
 
       const context = contexts[0];
-      const pages = context.pages();
+      const existingPages = context.pages();
 
-      let page;
-      if (pages.length === 0) {
+      let page: Page;
+      let allPages: Page[];
+
+      if (existingPages.length === 0) {
         // Create a new page if none exists
         page = await context.newPage();
+        allPages = [page];
+        console.log('✅ Created new page (no existing pages found)');
       } else {
-        page = pages[0];
+        allPages = [...existingPages];
+
+        // Find the most suitable page (prefer non-blank, responsive page)
+        let selectedPage: Page | null = null;
+
+        for (const candidatePage of allPages.slice().reverse()) { // Most recent first
+          if (candidatePage.isClosed()) {
+            continue;
+          }
+
+          const url = candidatePage.url();
+          // Prefer pages with actual content over about:blank or chrome pages
+          if (url && !url.startsWith('about:') && !url.startsWith('chrome:')) {
+            selectedPage = candidatePage;
+            console.log(`✅ Selected page with URL: ${url}`);
+            break;
+          }
+        }
+
+        // Fallback to last page if no suitable page found
+        if (!selectedPage) {
+          selectedPage = allPages[allPages.length - 1];
+          console.log(`ℹ️ Using last page as fallback: ${selectedPage.url()}`);
+        }
+
+        page = selectedPage;
+        console.log(`✅ Found ${existingPages.length} existing page(s), selected active page`);
       }
 
       // Set viewport to match configuration
       await page.setViewportSize({ width: 1024, height: 768 });
       console.log('✅ Viewport configured');
 
-      // Store session in cache
+      // Store session in cache with multi-tab support
       const session: BrowserSession = {
         kernelBrowserId: sessionId,
         browser,
         page,
+        pages: allPages, // Store all existing pages in stack
+        context, // Store context for page event listeners
         liveViewUrl,
         cdpWsUrl: cdpUrl,
         createdAt: new Date(),
@@ -797,6 +1111,23 @@ export class OnkernelClient {
 
       this.activeSessions.set(sessionId, session);
       console.log('💾 Session reconnected and stored in activeSessions Map');
+
+      // Set up page listeners for multi-tab handling
+      this.setupPageListeners(session, context);
+
+      // Set up close listeners for all existing pages
+      for (const existingPage of allPages) {
+        this.setupPageCloseListener(session, existingPage);
+      }
+      console.log(`✅ Page listeners attached for ${allPages.length} page(s)`);
+
+      // Set up download listeners for file download tracking
+      try {
+        await this.setupDownloadListeners(sessionId);
+      } catch (error) {
+        console.error('⚠️ Failed to setup download listeners (non-fatal):', error);
+        // Non-fatal - continue without download tracking
+      }
 
       // Update database - mark CDP as connected
       try {
@@ -871,6 +1202,275 @@ export class OnkernelClient {
       message: 'Session will automatically resume when accessed',
       status: 'resume_automatic',
     };
+  }
+
+  /**
+   * Set up CDP download listeners for a browser session
+   * This configures where downloads are saved and tracks download events
+   */
+  async setupDownloadListeners(sessionId: string): Promise<void> {
+    console.log('📥 Setting up download listeners for session:', sessionId);
+
+    const session = this.activeSessions.get(sessionId);
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found in active sessions`);
+    }
+
+    try {
+      // Get or create CDP session
+      const context = session.browser.contexts()[0];
+      if (!context) {
+        throw new Error('No browser context found');
+      }
+
+      const cdpClient = await context.newCDPSession(session.page);
+      session.cdpClient = cdpClient;
+
+      // Configure download behavior
+      await cdpClient.send('Browser.setDownloadBehavior', {
+        behavior: 'allow',
+        downloadPath: DOWNLOAD_DIR,
+        eventsEnabled: true,
+      });
+      console.log('✅ Download behavior configured, path:', DOWNLOAD_DIR);
+
+      // Initialize download tracker for this session
+      if (!this.downloadTracker.has(sessionId)) {
+        this.downloadTracker.set(sessionId, []);
+      }
+
+      // Listen for download start
+      cdpClient.on('Browser.downloadWillBegin', (event: any) => {
+        const filename = event.suggestedFilename ?? 'unknown';
+        const downloadInfo: DownloadInfo = {
+          filename,
+          path: `${DOWNLOAD_DIR}/${filename}`,
+          status: 'started',
+          downloadedAt: new Date(),
+          guid: event.guid,
+        };
+
+        const downloads = this.downloadTracker.get(sessionId) || [];
+        downloads.push(downloadInfo);
+        this.downloadTracker.set(sessionId, downloads);
+
+        console.log('📥 Download started:', filename, 'GUID:', event.guid);
+      });
+
+      // Listen for download progress
+      cdpClient.on('Browser.downloadProgress', (event: any) => {
+        const downloads = this.downloadTracker.get(sessionId) || [];
+        const download = downloads.find(d => d.guid === event.guid);
+
+        if (download) {
+          if (event.state === 'completed') {
+            download.status = 'completed';
+            download.size = event.receivedBytes;
+            console.log('✅ Download completed:', download.filename, 'Size:', event.receivedBytes);
+          } else if (event.state === 'canceled') {
+            download.status = 'failed';
+            console.log('❌ Download canceled:', download.filename);
+          } else if (event.state === 'inProgress') {
+            download.status = 'in_progress';
+            download.progress = event.totalBytes > 0
+              ? Math.round((event.receivedBytes / event.totalBytes) * 100)
+              : undefined;
+          }
+        }
+      });
+
+      console.log('✅ Download listeners attached for session:', sessionId);
+    } catch (error) {
+      console.error('❌ Failed to setup download listeners:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get the most recent completed download for a session
+   * First tries in-memory CDP tracking, then falls back to filesystem check
+   */
+  async getMostRecentDownload(sessionId: string): Promise<DownloadInfo | null> {
+    // First try in-memory tracker (CDP events)
+    const downloads = this.downloadTracker.get(sessionId) || [];
+    const completedDownloads = downloads
+      .filter(d => d.status === 'completed')
+      .sort((a, b) => b.downloadedAt.getTime() - a.downloadedAt.getTime());
+
+    if (completedDownloads.length > 0) {
+      const mostRecent = completedDownloads[0];
+      console.log('📥 Most recent download (from CDP tracker):', mostRecent.filename);
+      return mostRecent;
+    }
+
+    // Fallback: Check filesystem directly via OnKernel API
+    console.log('⚠️ No CDP-tracked downloads, checking filesystem...');
+    try {
+      const files = await this.listDownloadFiles(sessionId);
+
+      if (files.length === 0) {
+        console.log('ℹ️ No files found in download directory');
+        return null;
+      }
+
+      // IMPORTANT: Sort by mod_time descending to pick the NEWEST file
+      // mod_time format: "2025-12-02T10:53:09.753375746-05:00"
+      files.sort((a, b) => new Date(b.modTime).getTime() - new Date(a.modTime).getTime());
+
+      // Pick the newest file (first after sorting)
+      const newestFile = files[0];
+      console.log(`📥 Found ${files.length} file(s), picking newest: ${newestFile.name} (modified: ${newestFile.modTime})`);
+
+      return {
+        filename: newestFile.name,
+        path: newestFile.path,
+        size: newestFile.size,
+        status: 'completed',
+        downloadedAt: new Date(newestFile.modTime)
+      };
+    } catch (error) {
+      console.error('❌ Filesystem fallback failed:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get all downloads for a session
+   */
+  getDownloads(sessionId: string): DownloadInfo[] {
+    return this.downloadTracker.get(sessionId) || [];
+  }
+
+  /**
+   * List files in the download directory using OnKernel filesystem API
+   * Fallback when CDP download tracking fails
+   */
+  async listDownloadFiles(sessionId: string): Promise<Array<{name: string, path: string, size: number, modTime: string}>> {
+    console.log('📂 Listing download files for session:', sessionId);
+
+    const kernel = this.getKernel();
+    const session = this.activeSessions.get(sessionId);
+
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+
+    // Use OnKernel SDK to list files in download directory
+    const response = await kernel.browsers.fs.listFiles(session.kernelBrowserId, {
+      path: DOWNLOAD_DIR
+    });
+
+    console.log('📂 Found', response.length, 'items in download directory');
+
+    // Filter out directories, return only files with normalized properties
+    return response.filter((f: any) => !f.is_dir).map((f: any) => ({
+      name: f.name,
+      path: f.path,
+      size: f.size_bytes,
+      modTime: f.mod_time  // ISO timestamp like "2025-12-02T10:53:09.753375746-05:00"
+    }));
+  }
+
+  /**
+   * Read a downloaded file from the OnKernel browser filesystem
+   */
+  async readDownloadedFile(sessionId: string, filename: string): Promise<Buffer> {
+    console.log('📖 Reading downloaded file:', filename, 'from session:', sessionId);
+
+    try {
+      const kernel = this.getKernel();
+      const session = this.activeSessions.get(sessionId);
+
+      if (!session) {
+        throw new Error(`Session ${sessionId} not found in active sessions`);
+      }
+
+      const filePath = `${DOWNLOAD_DIR}/${filename}`;
+      console.log('📂 Reading from path:', filePath);
+
+      // Use OnKernel SDK to read file from browser filesystem
+      const response = await kernel.browsers.fs.readFile(session.kernelBrowserId, {
+        path: filePath,
+      });
+
+      // Get bytes from response
+      const bytes = await response.bytes();
+      const buffer = Buffer.from(bytes);
+
+      console.log('✅ File read successfully, size:', buffer.length, 'bytes');
+      return buffer;
+    } catch (error) {
+      console.error('❌ Failed to read downloaded file:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Upload a file to the browser's file input element using Playwright
+   * This is used to upload files from Supabase to the browser for form submissions
+   */
+  async uploadFileToInput(sessionId: string, fileBuffer: Buffer, filename: string): Promise<{ success: boolean; filename: string }> {
+    console.log('📤 Uploading file to browser input:', filename, 'for session:', sessionId);
+
+    try {
+      const session = this.activeSessions.get(sessionId);
+      if (!session) {
+        throw new Error(`Session ${sessionId} not found in active sessions`);
+      }
+
+      // Find file input element on the page
+      const fileInput = session.page.locator('input[type="file"]').first();
+
+      // Check if file input exists
+      const inputCount = await session.page.locator('input[type="file"]').count();
+      if (inputCount === 0) {
+        throw new Error('No file input element found on the page');
+      }
+
+      // Use Playwright's setInputFiles with buffer
+      await fileInput.setInputFiles({
+        name: filename,
+        mimeType: this.getMimeType(filename),
+        buffer: fileBuffer,
+      });
+
+      console.log('✅ File uploaded to input element:', filename);
+      return { success: true, filename };
+    } catch (error) {
+      console.error('❌ Failed to upload file to input:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get MIME type from filename extension
+   */
+  private getMimeType(filename: string): string {
+    const ext = filename.toLowerCase().split('.').pop();
+    const mimeTypes: { [key: string]: string } = {
+      'pdf': 'application/pdf',
+      'csv': 'text/csv',
+      'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'xls': 'application/vnd.ms-excel',
+      'doc': 'application/msword',
+      'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'txt': 'text/plain',
+      'json': 'application/json',
+      'png': 'image/png',
+      'jpg': 'image/jpeg',
+      'jpeg': 'image/jpeg',
+      'gif': 'image/gif',
+      'zip': 'application/zip',
+    };
+    return mimeTypes[ext || ''] || 'application/octet-stream';
+  }
+
+  /**
+   * Clear download tracker for a session (called when session is destroyed)
+   */
+  clearDownloads(sessionId: string): void {
+    this.downloadTracker.delete(sessionId);
+    console.log('🗑️ Download tracker cleared for session:', sessionId);
   }
 }
 

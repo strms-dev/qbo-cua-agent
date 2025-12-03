@@ -23,6 +23,9 @@ export interface ConfigOverrides {
   // OnKernel/Playwright Configuration
   TYPING_DELAY_MS?: number;              // Typing delay (default: 0)
   ONKERNEL_TIMEOUT_SECONDS?: number;     // Browser timeout (default: 60)
+
+  // System Prompt Override
+  SYSTEM_PROMPT?: string;                // Custom system prompt (overrides default)
 }
 
 /**
@@ -157,6 +160,9 @@ export interface ExecutionConfig {
   // Batch tracking (for webhook payload)
   batchExecutionId?: string;
   taskIndex?: number;
+
+  // System Prompt Override
+  systemPrompt?: string;                  // Custom system prompt (overrides default)
 }
 
 /**

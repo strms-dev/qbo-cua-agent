@@ -54,7 +54,7 @@ const parseBetas = (betasString: string): string[] => {
 };
 
 // Default system prompt for the agent
-export const DEFAULT_SYSTEM_PROMPT = `#ROLE: You are an AI agent that can see and control a browser to help the user perform bookkeeping tasks. The display is  1024x768 pixels.
+export const DEFAULT_SYSTEM_PROMPT = `#ROLE: You are an AI agent that can see and control a browser to help the user perform bookkeeping tasks. The display is 1024x768 pixels.
 #TOOLS:
 You have access to these tools:
 1. computer_use allows you to control the browser:
@@ -217,6 +217,93 @@ const MEMORY_TOOL = {
   name: "memory" as const,
 };
 
+// Define save_recent_download tool for saving downloaded files to Supabase
+const SAVE_RECENT_DOWNLOAD_TOOL = {
+  name: "save_recent_download",
+  description: `Use this tool to save a recently downloaded file to cloud storage with business metadata.
+
+ALWAYS call this tool AFTER downloading a file (e.g., bank statement) to persist it for future use.
+
+The tool will:
+1. Capture the most recent downloaded file from the browser
+2. Upload it to cloud storage (Supabase)
+3. Store metadata linking the file to the specified business context
+4. Return the filename for confirmation
+
+IMPORTANT: You must have already downloaded a file before calling this tool.`,
+  input_schema: {
+    type: "object",
+    properties: {
+      type: {
+        type: "string",
+        enum: ["bank_statement", "invoice", "receipt", "tax_document"],
+        description: "Type of file being saved"
+      },
+      practice_protect_name: {
+        type: "string",
+        description: "The <practice_protect_name> related to the file"
+      },
+      bank_account_name: {
+        type: "string",
+        description: "The <bank_account_name> related to the file"
+      },
+      quickbooks_company_name: {
+        type: "string",
+        description: "The <quickbooks_company_name> related to the file"
+      },
+      quickbooks_bank_account_name: {
+        type: "string",
+        description: "The <quickbooks_bank_account_name> related to the file"
+      }
+    },
+    required: ["type", "practice_protect_name", "bank_account_name", "quickbooks_company_name", "quickbooks_bank_account_name"]
+  }
+};
+
+// Define upload_already_downloaded_file tool for uploading previously saved files to browser
+const UPLOAD_ALREADY_DOWNLOADED_FILE_TOOL = {
+  name: "upload_already_downloaded_file",
+  description: `Use this tool to upload a previously saved file to a file input element in the browser.
+
+Call this tool when you need to:
+1. Upload a file that was saved in a previous session (e.g., bank statement to QuickBooks)
+2. The file was previously saved using save_recent_download tool
+
+The tool will:
+1. Find the matching file from cloud storage using the provided metadata
+2. Upload it to the file input element on the current page
+3. Return the filename for confirmation
+
+IMPORTANT: Make sure a file input element (Choose File button) is visible on the page before calling this tool.`,
+  input_schema: {
+    type: "object",
+    properties: {
+      type: {
+        type: "string",
+        enum: ["bank_statement", "invoice", "receipt", "tax_document"],
+        description: "Type of file to upload"
+      },
+      practice_protect_name: {
+        type: "string",
+        description: "The <practice_protect_name> related to the file"
+      },
+      bank_account_name: {
+        type: "string",
+        description: "The <bank_account_name> related to the file"
+      },
+      quickbooks_company_name: {
+        type: "string",
+        description: "The <quickbooks_company_name> related to the file"
+      },
+      quickbooks_bank_account_name: {
+        type: "string",
+        description: "The <quickbooks_bank_account_name> related to the file"
+      }
+    },
+    required: ["type", "practice_protect_name", "bank_account_name", "quickbooks_company_name", "quickbooks_bank_account_name"]
+  }
+};
+
 // Interface for tool results (following Anthropic's demo)
 interface ToolResult {
   output?: string;
@@ -264,6 +351,42 @@ function sanitizeApiData(obj: any): any {
   }
 
   return obj;
+}
+
+// Helper to remove invalid/corrupted base64 images from messages
+// This prevents Anthropic API errors when resuming tasks with sanitized data
+function removeInvalidBase64Images(messages: any[]): any[] {
+  // Deep clone to avoid mutating original
+  return JSON.parse(JSON.stringify(messages)).map((msg: any) => {
+    // Only process user messages with array content
+    if (msg.role === 'user' && Array.isArray(msg.content)) {
+      msg.content = msg.content.map((item: any) => {
+        // Process tool_result blocks that contain images
+        if (item.type === 'tool_result' && Array.isArray(item.content)) {
+          item.content = item.content.filter((c: any) => {
+            // Check if this is a corrupted base64 image block
+            if (c.type === 'image' && c.source?.type === 'base64') {
+              const base64Data = c.source.data;
+
+              // Remove if it's the sanitization marker or invalid
+              if (
+                base64Data === '[BASE64_IMAGE_REMOVED]' ||
+                !base64Data ||
+                typeof base64Data !== 'string' ||
+                base64Data.length < 100 // Valid base64 images are much larger
+              ) {
+                console.log('🗑️ Removing invalid/corrupted base64 image from tool_result');
+                return false; // Filter out this content block
+              }
+            }
+            return true; // Keep all other content blocks
+          });
+        }
+        return item;
+      });
+    }
+    return msg;
+  });
 }
 
 // Helper to trim base64 from objects for logging (defined early)
@@ -335,6 +458,154 @@ async function uploadScreenshotToStorage(base64Image: string, sessionId: string)
     return urlData.signedUrl;
   } catch (error) {
     console.error('❌ Screenshot upload error:', error);
+    return null;
+  }
+}
+
+// Helper function to get MIME type from filename
+function getMimeType(filename: string): string {
+  const ext = filename.toLowerCase().split('.').pop();
+  const mimeTypes: { [key: string]: string } = {
+    'pdf': 'application/pdf',
+    'csv': 'text/csv',
+    'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'xls': 'application/vnd.ms-excel',
+    'doc': 'application/msword',
+    'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'txt': 'text/plain',
+    'json': 'application/json',
+    'png': 'image/png',
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'gif': 'image/gif',
+    'zip': 'application/zip',
+  };
+  return mimeTypes[ext || ''] || 'application/octet-stream';
+}
+
+// Upload downloaded file to Supabase storage with metadata
+interface DownloadFileMetadata {
+  type: string;
+  practice_protect_name: string;
+  bank_account_name: string;
+  quickbooks_company_name: string;
+  quickbooks_bank_account_name: string;
+}
+
+async function uploadDownloadToStorage(
+  fileBuffer: Buffer,
+  filename: string,
+  sessionId: string,
+  browserSessionId: string,
+  metadata: DownloadFileMetadata
+): Promise<{ supabasePath: string; signedUrl: string } | null> {
+  try {
+    const contentType = getMimeType(filename);
+    const timestamp = Date.now();
+
+    // Generate organized path: type/practice/bank/timestamp-filename
+    const supabasePath = `${metadata.type}/${metadata.practice_protect_name}/${metadata.bank_account_name}/${timestamp}-${filename}`;
+
+    console.log('📤 Uploading file to Supabase:', supabasePath);
+
+    // Upload to Supabase Storage (cua-downloads bucket)
+    const { data, error } = await supabase.storage
+      .from('cua-downloads')
+      .upload(supabasePath, fileBuffer, {
+        contentType: contentType,
+        upsert: false
+      });
+
+    if (error) {
+      console.error('❌ Failed to upload file:', error);
+      return null;
+    }
+
+    // Generate signed URL with 1 year expiration
+    const { data: urlData, error: urlError } = await supabase.storage
+      .from('cua-downloads')
+      .createSignedUrl(supabasePath, 31536000);
+
+    if (urlError || !urlData) {
+      console.error('❌ Failed to create signed URL:', urlError);
+      return null;
+    }
+
+    // Store metadata in downloaded_files table
+    const { error: dbError } = await supabase
+      .from('downloaded_files')
+      .insert({
+        session_id: sessionId,
+        browser_session_id: browserSessionId,
+        filename: filename,
+        supabase_path: supabasePath,
+        supabase_url: urlData.signedUrl,
+        file_size: fileBuffer.length,
+        content_type: contentType,
+        file_type: metadata.type,
+        practice_protect_name: metadata.practice_protect_name,
+        bank_account_name: metadata.bank_account_name,
+        quickbooks_company_name: metadata.quickbooks_company_name,
+        quickbooks_bank_account_name: metadata.quickbooks_bank_account_name,
+        downloaded_at: new Date().toISOString()
+      });
+
+    if (dbError) {
+      console.error('⚠️ Failed to store file metadata:', dbError);
+      // Non-fatal - file is still uploaded
+    } else {
+      console.log('✅ File metadata stored in database');
+    }
+
+    console.log('✅ File uploaded with signed URL:', urlData.signedUrl);
+    return { supabasePath, signedUrl: urlData.signedUrl };
+  } catch (error) {
+    console.error('❌ File upload error:', error);
+    return null;
+  }
+}
+
+// Retrieve file from Supabase storage by metadata
+async function getFileFromStorage(metadata: DownloadFileMetadata): Promise<{ filename: string; buffer: Buffer } | null> {
+  try {
+    // Query for the most recent matching file
+    const { data: fileRecord, error: queryError } = await supabase
+      .from('downloaded_files')
+      .select('*')
+      .eq('file_type', metadata.type)
+      .eq('practice_protect_name', metadata.practice_protect_name)
+      .eq('bank_account_name', metadata.bank_account_name)
+      .eq('quickbooks_company_name', metadata.quickbooks_company_name)
+      .eq('quickbooks_bank_account_name', metadata.quickbooks_bank_account_name)
+      .order('downloaded_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (queryError || !fileRecord) {
+      console.error('❌ No matching file found:', queryError);
+      return null;
+    }
+
+    console.log('📥 Found file in database:', fileRecord.filename);
+
+    // Download file from Supabase storage
+    const { data: fileData, error: downloadError } = await supabase.storage
+      .from('cua-downloads')
+      .download(fileRecord.supabase_path);
+
+    if (downloadError || !fileData) {
+      console.error('❌ Failed to download file:', downloadError);
+      return null;
+    }
+
+    // Convert blob to buffer
+    const arrayBuffer = await fileData.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    console.log('✅ File downloaded from Supabase, size:', buffer.length);
+    return { filename: fileRecord.filename, buffer };
+  } catch (error) {
+    console.error('❌ Error retrieving file:', error);
     return null;
   }
 }
@@ -772,7 +1043,7 @@ export async function samplingLoopWithStreaming(
         max_tokens: effectiveConfig.anthropicMaxTokens,
         system: systemPrompt,
         messages: finalMessages,
-        tools: [COMPUTER_TOOL, REPORT_TASK_STATUS_TOOL, MEMORY_TOOL]
+        tools: [COMPUTER_TOOL, REPORT_TASK_STATUS_TOOL, MEMORY_TOOL, SAVE_RECENT_DOWNLOAD_TOOL, UPLOAD_ALREADY_DOWNLOADED_FILE_TOOL]
       };
 
       // Add betas (including prompt caching and context management if enabled)
@@ -1204,6 +1475,144 @@ export async function samplingLoopWithStreaming(
               error: toolResult.error
             }
           });
+        } else if (toolBlock.type === 'tool_use' && toolBlock.name === 'save_recent_download') {
+          console.log(`📥 Save recent download tool: ${toolBlock.id}`);
+
+          const { type, practice_protect_name, bank_account_name, quickbooks_company_name, quickbooks_bank_account_name } = toolBlock.input as {
+            type: string;
+            practice_protect_name: string;
+            bank_account_name: string;
+            quickbooks_company_name: string;
+            quickbooks_bank_account_name: string;
+          };
+
+          let toolResult: ToolResult;
+          try {
+            // Get the most recent download from the browser session
+            // Uses CDP tracking first, then falls back to filesystem check
+            const recentDownload = await onkernelClient.getMostRecentDownload(browserSessionId);
+
+            if (!recentDownload) {
+              toolResult = { error: 'No recent download found. Make sure you have downloaded a file before calling this tool.' };
+            } else {
+              console.log('📥 Found recent download:', recentDownload.filename);
+
+              // Read the file from OnKernel browser filesystem
+              const fileBuffer = await onkernelClient.readDownloadedFile(browserSessionId, recentDownload.filename);
+
+              // Upload to Supabase with metadata
+              const metadata: DownloadFileMetadata = {
+                type,
+                practice_protect_name,
+                bank_account_name,
+                quickbooks_company_name,
+                quickbooks_bank_account_name
+              };
+
+              const uploadResult = await uploadDownloadToStorage(
+                fileBuffer,
+                recentDownload.filename,
+                sessionId,
+                browserSessionId,
+                metadata
+              );
+
+              if (uploadResult) {
+                toolResult = {
+                  output: `File saved successfully!\n` +
+                    `Filename: ${recentDownload.filename}\n` +
+                    `Type: ${type}\n` +
+                    `Practice: ${practice_protect_name}\n` +
+                    `Bank Account: ${bank_account_name}\n` +
+                    `Storage URL: ${uploadResult.signedUrl}`
+                };
+              } else {
+                toolResult = { error: 'Failed to upload file to storage' };
+              }
+            }
+          } catch (error: any) {
+            console.error('❌ Save recent download error:', error);
+            toolResult = { error: `Failed to save download: ${error.message}` };
+          }
+
+          const toolResultBlock = makeToolResult(toolResult, toolBlock.id);
+          toolResults.push(toolResultBlock);
+
+          // Add to tool calls for conversation history
+          assistantMessage.toolCalls.push({
+            toolCallId: toolBlock.id,
+            toolName: 'save_recent_download',
+            args: toolBlock.input,
+            result: {
+              success: !toolResult.error,
+              description: toolResult.output || toolResult.error || 'Save download operation completed',
+              error: toolResult.error
+            }
+          });
+        } else if (toolBlock.type === 'tool_use' && toolBlock.name === 'upload_already_downloaded_file') {
+          console.log(`📤 Upload already downloaded file tool: ${toolBlock.id}`);
+
+          const { type, practice_protect_name, bank_account_name, quickbooks_company_name, quickbooks_bank_account_name } = toolBlock.input as {
+            type: string;
+            practice_protect_name: string;
+            bank_account_name: string;
+            quickbooks_company_name: string;
+            quickbooks_bank_account_name: string;
+          };
+
+          let toolResult: ToolResult;
+          try {
+            // Get file from Supabase storage by metadata
+            const metadata: DownloadFileMetadata = {
+              type,
+              practice_protect_name,
+              bank_account_name,
+              quickbooks_company_name,
+              quickbooks_bank_account_name
+            };
+
+            const fileData = await getFileFromStorage(metadata);
+
+            if (!fileData) {
+              toolResult = {
+                error: `No matching file found for:\n` +
+                  `Type: ${type}\n` +
+                  `Practice: ${practice_protect_name}\n` +
+                  `Bank Account: ${bank_account_name}\n` +
+                  `QuickBooks Company: ${quickbooks_company_name}\n` +
+                  `QuickBooks Bank Account: ${quickbooks_bank_account_name}`
+              };
+            } else {
+              console.log('📥 Retrieved file from storage:', fileData.filename);
+
+              // Upload file to browser's file input element
+              const uploadResult = await onkernelClient.uploadFileToInput(browserSessionId, fileData.buffer, fileData.filename);
+
+              toolResult = {
+                output: `File uploaded to browser successfully!\n` +
+                  `Filename: ${fileData.filename}\n` +
+                  `The file has been set on the file input element. You can now submit the form.`
+              };
+            }
+          } catch (error: any) {
+            console.error('❌ Upload already downloaded file error:', error);
+            toolResult = { error: `Failed to upload file: ${error.message}` };
+          }
+
+          const toolResultBlock = makeToolResult(toolResult, toolBlock.id);
+          toolResults.push(toolResultBlock);
+
+          // Add to tool calls for conversation history
+          assistantMessage.toolCalls.push({
+            toolCallId: toolBlock.id,
+            toolName: 'upload_already_downloaded_file',
+            args: toolBlock.input,
+            result: {
+              success: !toolResult.error,
+              description: toolResult.output || toolResult.error || 'Upload file operation completed',
+              error: toolResult.error
+            }
+          });
         }
       }
 
@@ -1630,13 +2039,14 @@ export async function POST(req: Request) {
       // Check for resumable task (stopped, paused, or failed)
       let currentTaskId: string | null = null;
       let startIteration = 0;
+      let effectiveMaxIterations = AGENT_MAX_ITERATIONS; // Default from .env
 
       if (!currentSessionId.startsWith('fallback-')) {
         try {
           // Look for resumable task
           const { data: resumableTask } = await supabase
             .from('tasks')
-            .select('id, status, current_iteration, user_message')
+            .select('id, status, current_iteration, user_message, max_iterations')
             .eq('session_id', currentSessionId)
             .in('status', ['stopped', 'paused', 'failed'])
             .order('created_at', { ascending: false })
@@ -1647,7 +2057,12 @@ export async function POST(req: Request) {
             // Resume existing task
             currentTaskId = resumableTask.id;
             startIteration = resumableTask.current_iteration || 0;
-            console.log(`🔄 Resuming task ${currentTaskId} from iteration ${startIteration} (status: ${resumableTask.status})`);
+            // Use task's stored max_iterations to preserve batch config overrides
+            if (resumableTask.max_iterations) {
+              effectiveMaxIterations = resumableTask.max_iterations;
+              console.log(`📋 Using task's stored maxIterations: ${effectiveMaxIterations}`);
+            }
+            console.log(`🔄 Resuming task ${currentTaskId} from iteration ${startIteration}/${effectiveMaxIterations} (status: ${resumableTask.status})`);
 
             // Update task status to running
             await supabase
@@ -1846,6 +2261,10 @@ export async function POST(req: Request) {
 
                   // Use the full conversation history from the last request
                   conversationMessages = lastRequestMessage.anthropic_request.messages;
+
+                  // Remove any corrupted base64 images from sanitized data
+                  conversationMessages = removeInvalidBase64Images(conversationMessages);
+
                   console.log(`🔄 Reconstructed ${conversationMessages.length} messages from last anthropic_request`);
 
                   // Add the assistant's response to this request (with tool_use blocks)
@@ -1855,6 +2274,48 @@ export async function POST(req: Request) {
                       content: lastRequestMessage.anthropic_response.content
                     });
                     console.log(`✅ Added assistant response with ${lastRequestMessage.anthropic_response.content.length} content blocks`);
+
+                    // Find ALL tool_use blocks that need synthetic tool_results
+                    // This happens when task pauses - tool_results were created locally but never sent to Anthropic
+                    // because the loop breaks after report_task_status. ALL tool_use blocks need their results.
+                    const toolUseBlocks = lastRequestMessage.anthropic_response.content.filter(
+                      (block: any) => block.type === 'tool_use'
+                    );
+
+                    if (toolUseBlocks.length > 0) {
+                      const syntheticToolResults = toolUseBlocks.map((toolUse: any) => {
+                        if (toolUse.name === 'report_task_status') {
+                          // Specific message for report_task_status
+                          return {
+                            type: 'tool_result',
+                            tool_use_id: toolUse.id,
+                            content: [{
+                              type: 'text',
+                              text: `Task status recorded: ${toolUse.input?.status || 'unknown'}\nSystem will update task accordingly.`
+                            }],
+                            is_error: false
+                          };
+                        }
+
+                        // For other tools (computer_use, memory, etc.) - placeholder result
+                        // indicating the task was paused before this tool's result was captured
+                        return {
+                          type: 'tool_result',
+                          tool_use_id: toolUse.id,
+                          content: [{
+                            type: 'text',
+                            text: `[Task was paused before this tool completed. Resuming execution.]`
+                          }],
+                          is_error: false
+                        };
+                      });
+
+                      conversationMessages.push({
+                        role: 'user',
+                        content: syntheticToolResults
+                      });
+                      console.log(`✅ Added ${syntheticToolResults.length} synthetic tool_result(s) for orphaned tool_use blocks`);
+                    }
                   }
                 } else {
                   // Fallback: reconstruct message by message
@@ -1891,20 +2352,37 @@ export async function POST(req: Request) {
                 });
                 console.log(`✅ Added enhanced user message with <task_id> tag to conversation`);
               } else if (currentTaskId && conversationMessages[conversationMessages.length - 1]?.role === 'user') {
-                // Replace the last user message with enhanced version (ensures task_id is present)
-                conversationMessages[conversationMessages.length - 1].content = enhancedUserMessage;
-                console.log(`🔄 Replaced last user message with enhanced version (added <task_id> tag)`);
+                const lastMessage = conversationMessages[conversationMessages.length - 1];
+
+                // Check if last user message is a tool_result (synthetic or real)
+                // If so, we need to add the new user message AFTER it, not replace it
+                const isToolResult = Array.isArray(lastMessage.content) &&
+                  lastMessage.content.some((block: any) => block.type === 'tool_result');
+
+                if (isToolResult) {
+                  // Add new user message after the tool_result
+                  conversationMessages.push({
+                    role: 'user',
+                    content: enhancedUserMessage
+                  });
+                  console.log(`✅ Added enhanced user message after tool_result`);
+                } else {
+                  // Replace the last user message with enhanced version (ensures task_id is present)
+                  conversationMessages[conversationMessages.length - 1].content = enhancedUserMessage;
+                  console.log(`🔄 Replaced last user message with enhanced version (added <task_id> tag)`);
+                }
               }
 
               // Execute sampling loop with streaming callback
               // Pass taskId and startIteration for task lifecycle management
+              // Use effectiveMaxIterations to preserve batch config overrides when resuming
               const { finalResponse } = await samplingLoopWithStreaming(
                 systemPrompt,
                 conversationMessages,
                 currentBrowserSessionId,
                 currentSessionId,
                 sendEvent,
-                AGENT_MAX_ITERATIONS,
+                effectiveMaxIterations,
                 currentTaskId,
                 startIteration
               );

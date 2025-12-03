@@ -94,9 +94,9 @@ async function runTest(scenarioName: keyof typeof TEST_SCENARIOS) {
   // Build request body
   const requestBody: BatchExecutionRequest = {
     tasks: scenario.tasks,
-    webhookUrl: scenario.webhookUrl,
-    webhookSecret: scenario.webhookSecret,
-    globalConfigOverrides: scenario.globalConfigOverrides,
+    webhookUrl: WEBHOOK_URL,
+    webhookSecret: WEBHOOK_SECRET,
+    globalConfigOverrides: 'globalConfigOverrides' in scenario ? scenario.globalConfigOverrides : undefined,
   };
 
   console.log('\n📤 Request:');
@@ -128,9 +128,9 @@ async function runTest(scenarioName: keyof typeof TEST_SCENARIOS) {
       console.log(`   Task IDs: ${batchResponse.taskIds.join(', ')}`);
       console.log(`   Status: ${batchResponse.status}`);
 
-      if (scenario.webhookUrl) {
+      if (WEBHOOK_URL) {
         console.log(`\n📡 Webhook notifications will be sent to:`);
-        console.log(`   ${scenario.webhookUrl}`);
+        console.log(`   ${WEBHOOK_URL}`);
         console.log(`   Check your webhook.site URL for status updates!`);
       }
 
@@ -138,7 +138,7 @@ async function runTest(scenarioName: keyof typeof TEST_SCENARIOS) {
       console.log(`   1. Check database: batch_executions table`);
       console.log(`   2. Check database: tasks table`);
       console.log(`   3. Watch server logs for execution details`);
-      if (scenario.webhookUrl) {
+      if (WEBHOOK_URL) {
         console.log(`   4. Check webhook.site for notifications`);
       }
     } else {
