@@ -36,7 +36,9 @@
       "Bash(mcp list-tools:*)",
       "Bash(mcp list-resources:*)",
       "Bash(node -e:*)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Bash(npx shadcn@latest init:*)",
+      "Bash(npx shadcn@latest add:*)"
     ],
     "deny": [],
     "ask": []
