@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { createClient } from '@/lib/supabase/server';
 import { onkernelClient } from '@/lib/onkernel';
 import { MemoryToolHandlers } from '@/lib/memory-handlers';
 import { sendWebhook } from '@/lib/webhook';
@@ -31,9 +32,9 @@ const ENABLE_PROMPT_CACHING = (process.env.ENABLE_PROMPT_CACHING || 'yes').toLow
 
 // Configure context management (Anthropic beta feature for automatic context cleanup)
 const ENABLE_CONTEXT_MANAGEMENT = (process.env.ENABLE_CONTEXT_MANAGEMENT || 'yes').toLowerCase() === 'yes';
-const CONTEXT_TRIGGER_TOKENS = parseInt(process.env.CONTEXT_TRIGGER_TOKENS || '0', 10); // 0 = use Anthropic default (~100k tokens)
-const CONTEXT_KEEP_TOOL_USES = parseInt(process.env.CONTEXT_KEEP_TOOL_USES || '5', 10); // Keep last 5 tool executions
-const CONTEXT_CLEAR_MIN_TOKENS = parseInt(process.env.CONTEXT_CLEAR_MIN_TOKENS || '20000', 10); // Clear at least 20k tokens
+const CONTEXT_TRIGGER_TOKENS = parseInt(process.env.CONTEXT_TRIGGER_TOKENS || '15000', 10); // Trigger cleanup at 15k tokens (was 100k default)
+const CONTEXT_KEEP_TOOL_USES = parseInt(process.env.CONTEXT_KEEP_TOOL_USES || '3', 10); // Keep last 3 tool executions
+const CONTEXT_CLEAR_MIN_TOKENS = parseInt(process.env.CONTEXT_CLEAR_MIN_TOKENS || '5000', 10); // Clear at least 5k tokens
 const CONTEXT_EXCLUDE_TOOLS = (process.env.CONTEXT_EXCLUDE_TOOLS || 'report_task_status,memory')
   .split(',')
   .map(tool => tool.trim())
@@ -330,6 +331,14 @@ function sanitizeApiData(obj: any): any {
   }
 
   if (obj && typeof obj === 'object') {
+    // Preserve thinking blocks entirely - signature is required for tool use on resume
+    // Per Anthropic docs: "When posting tool results, the entire unmodified thinking block must be included"
+    // The signature field contains encrypted thinking content and would otherwise be corrupted
+    // by the base64 pattern matcher below
+    if (obj.type === 'thinking' || obj.type === 'redacted_thinking') {
+      return obj;
+    }
+
     const sanitized: any = {};
     for (const [key, value] of Object.entries(obj)) {
       // Remove base64_image, base64Image, or data fields that contain image data
@@ -1198,6 +1207,21 @@ export async function samplingLoopWithStreaming(
       console.log(`⏱️  Anthropic API response time: ${apiResponseTimeMs}ms (${(apiResponseTimeMs / 1000).toFixed(2)}s)`);
       console.log('🎯 Response stop_reason:', response.stop_reason);
 
+      // Log token usage for cost tracking
+      const usage = response.usage;
+      const cacheUsage = usage as any;
+      console.log(`📊 Token usage: ${usage.input_tokens} in / ${usage.output_tokens} out`);
+      if (cacheUsage.cache_read_input_tokens || cacheUsage.cache_creation_input_tokens) {
+        console.log(`   💾 Cache: ${cacheUsage.cache_read_input_tokens || 0} read / ${cacheUsage.cache_creation_input_tokens || 0} created`);
+      }
+
+      // Log context management activity if present
+      const contextMgmt = (response as any).context_management;
+      if (contextMgmt?.applied_edits?.length > 0) {
+        const edit = contextMgmt.applied_edits[0];
+        console.log(`🧹 Context cleanup: cleared ${edit.cleared_input_tokens} tokens, ${edit.cleared_tool_uses} tool uses`);
+      }
+
       // Prepare request and response for storage based on configuration
       const responseData = {
         id: response.id,
@@ -1664,6 +1688,10 @@ export async function samplingLoopWithStreaming(
         }
 
         // Save performance metrics to performance_metrics table
+        // Extract context management info if present (from beta response)
+        const contextManagement = (response as any).context_management;
+        const appliedEdit = contextManagement?.applied_edits?.[0];
+
         try {
           await supabase
             .from('performance_metrics')
@@ -1675,6 +1703,14 @@ export async function samplingLoopWithStreaming(
               api_response_time_ms: apiResponseTimeMs,
               iteration_total_time_ms: iterationTotalTimeMs,
               tool_execution_time_ms: toolExecutionTimeMs,
+              // Token usage tracking from Anthropic API response
+              input_tokens: response.usage?.input_tokens ?? null,
+              output_tokens: response.usage?.output_tokens ?? null,
+              cache_read_input_tokens: (response.usage as any)?.cache_read_input_tokens ?? null,
+              cache_creation_input_tokens: (response.usage as any)?.cache_creation_input_tokens ?? null,
+              // Context management cleanup tracking
+              context_cleared_tokens: appliedEdit?.cleared_input_tokens ?? null,
+              context_cleared_tool_uses: appliedEdit?.cleared_tool_uses ?? null,
               metadata: {
                 tools_executed: toolResults.length,
                 screenshots_optimized: optimizedCount,
@@ -1955,6 +1991,27 @@ const loggedMessages: any[] = [];
 export async function POST(req: Request) {
   console.log('🤖 Agent Chat API called');
 
+  // Authentication check
+  try {
+    const supabaseAuth = await createClient();
+    const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
+
+    if (authError || !user) {
+      console.log('🚫 Unauthorized request to chat API');
+      return Response.json(
+        { error: 'Unauthorized', message: 'Authentication required' },
+        { status: 401 }
+      );
+    }
+    console.log('✅ Authenticated user:', user.email);
+  } catch (authError) {
+    console.error('⚠️ Auth check failed:', authError);
+    return Response.json(
+      { error: 'Unauthorized', message: 'Authentication required' },
+      { status: 401 }
+    );
+  }
+
   try {
     const { messages, sessionId, browserSessionId, continueAgent, stream = true } = await req.json();
     console.log('📨 Received messages:', messages?.length || 0);
@@ -2040,13 +2097,14 @@ export async function POST(req: Request) {
       let currentTaskId: string | null = null;
       let startIteration = 0;
       let effectiveMaxIterations = AGENT_MAX_ITERATIONS; // Default from .env
+      let resumeExecutionConfig: ExecutionConfig | undefined; // Webhook config for batch task resume
 
       if (!currentSessionId.startsWith('fallback-')) {
         try {
-          // Look for resumable task
+          // Look for resumable task (include batch_execution_id for webhook config)
           const { data: resumableTask } = await supabase
             .from('tasks')
-            .select('id, status, current_iteration, user_message, max_iterations')
+            .select('id, status, current_iteration, user_message, max_iterations, batch_execution_id')
             .eq('session_id', currentSessionId)
             .in('status', ['stopped', 'paused', 'failed'])
             .order('created_at', { ascending: false })
@@ -2063,6 +2121,35 @@ export async function POST(req: Request) {
               console.log(`📋 Using task's stored maxIterations: ${effectiveMaxIterations}`);
             }
             console.log(`🔄 Resuming task ${currentTaskId} from iteration ${startIteration}/${effectiveMaxIterations} (status: ${resumableTask.status})`);
+
+            // Fetch webhook config from batch_executions if this is a batch task
+            if (resumableTask.batch_execution_id) {
+              try {
+                const { data: batchExec } = await supabase
+                  .from('batch_executions')
+                  .select('webhook_url, webhook_secret, config_overrides')
+                  .eq('id', resumableTask.batch_execution_id)
+                  .single();
+
+                if (batchExec) {
+                  resumeExecutionConfig = {
+                    agentMaxIterations: effectiveMaxIterations,
+                    samplingLoopDelayMs: SAMPLING_LOOP_DELAY_MS,
+                    maxBase64Screenshots: MAX_BASE64_SCREENSHOTS,
+                    keepRecentThinkingBlocks: KEEP_RECENT_THINKING_BLOCKS,
+                    thinkingBudgetTokens: THINKING_BUDGET_TOKENS,
+                    anthropicMaxTokens: 4096,
+                    anthropicModel: 'claude-sonnet-4-20250514',
+                    webhookUrl: batchExec.webhook_url || undefined,
+                    webhookSecret: batchExec.webhook_secret || undefined,
+                    batchExecutionId: resumableTask.batch_execution_id,
+                  };
+                  console.log(`📡 Loaded webhook config for batch task: ${batchExec.webhook_url ? 'webhook configured' : 'no webhook'}`);
+                }
+              } catch (error) {
+                console.error('⚠️ Failed to fetch batch webhook config:', error);
+              }
+            }
 
             // Update task status to running
             await supabase
@@ -2376,6 +2463,7 @@ export async function POST(req: Request) {
               // Execute sampling loop with streaming callback
               // Pass taskId and startIteration for task lifecycle management
               // Use effectiveMaxIterations to preserve batch config overrides when resuming
+              // Pass resumeExecutionConfig to preserve webhook config for batch tasks
               const { finalResponse } = await samplingLoopWithStreaming(
                 systemPrompt,
                 conversationMessages,
@@ -2384,7 +2472,8 @@ export async function POST(req: Request) {
                 sendEvent,
                 effectiveMaxIterations,
                 currentTaskId,
-                startIteration
+                startIteration,
+                resumeExecutionConfig
               );
 
               // Send completion event
