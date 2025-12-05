@@ -11,6 +11,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { IterationsTable } from './IterationsTable';
@@ -28,6 +34,8 @@ interface Task {
   max_iterations: number | null;
   agent_status: string | null;
   duration_ms: number | null;
+  total_input_tokens: number | null;
+  total_output_tokens: number | null;
 }
 
 interface Iteration {
@@ -36,6 +44,12 @@ interface Iteration {
   api_response_time_ms: number | null;
   tool_execution_time_ms: number | null;
   iteration_total_time_ms: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_input_tokens: number | null;
+  cache_creation_input_tokens: number | null;
+  context_cleared_tokens: number | null;
+  context_cleared_tool_uses: number | null;
   created_at: string;
 }
 
@@ -54,6 +68,12 @@ function formatDuration(ms: number | null): string {
 function formatTime(isoString: string | null): string {
   if (!isoString) return '-';
   return new Date(isoString).toLocaleTimeString();
+}
+
+function formatTokens(tokens: number | null): string {
+  if (tokens === null || tokens === 0) return '-';
+  if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}k`;
+  return tokens.toString();
 }
 
 function truncateMessage(message: string, maxLength: number = 60): string {
@@ -129,6 +149,8 @@ export function TasksTable({ tasks, loading }: TasksTableProps) {
             <TableHead>Started</TableHead>
             <TableHead>Duration</TableHead>
             <TableHead>Iterations</TableHead>
+            <TableHead>In Tokens</TableHead>
+            <TableHead>Out Tokens</TableHead>
             <TableHead>Agent Status</TableHead>
           </TableRow>
         </TableHeader>
@@ -150,8 +172,23 @@ export function TasksTable({ tasks, loading }: TasksTableProps) {
                     {task.status}
                   </Badge>
                 </TableCell>
-                <TableCell className="max-w-[300px]" title={task.user_message}>
-                  {truncateMessage(task.user_message)}
+                <TableCell className="max-w-[300px]">
+                  <TooltipProvider>
+                    <Tooltip delayDuration={200}>
+                      <TooltipTrigger asChild>
+                        <span className="cursor-help hover:underline decoration-dotted">
+                          {truncateMessage(task.user_message)}
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent
+                        side="bottom"
+                        align="start"
+                        className="max-w-lg max-h-80 overflow-auto whitespace-pre-wrap text-sm"
+                      >
+                        {task.user_message}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {formatTime(task.started_at)}
@@ -161,6 +198,12 @@ export function TasksTable({ tasks, loading }: TasksTableProps) {
                 </TableCell>
                 <TableCell className="font-mono">
                   {task.current_iteration || 0}/{task.max_iterations || '-'}
+                </TableCell>
+                <TableCell className="font-mono text-blue-600">
+                  {formatTokens(task.total_input_tokens)}
+                </TableCell>
+                <TableCell className="font-mono text-green-600">
+                  {formatTokens(task.total_output_tokens)}
                 </TableCell>
                 <TableCell>
                   {task.agent_status && (
@@ -172,7 +215,7 @@ export function TasksTable({ tasks, loading }: TasksTableProps) {
               </TableRow>
               {expandedTasks.has(task.id) && (
                 <TableRow>
-                  <TableCell colSpan={7} className="p-0">
+                  <TableCell colSpan={9} className="p-0">
                     <div className="pl-12 pr-4 py-4">
                       <h4 className="text-sm font-medium mb-2">Iterations</h4>
                       <IterationsTable

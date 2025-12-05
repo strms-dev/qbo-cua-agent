@@ -14,6 +14,13 @@ export interface IterationMetrics {
   api_response_time_ms: number | null;
   tool_execution_time_ms: number | null;
   iteration_total_time_ms: number | null;
+  // Token usage metrics
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_input_tokens: number | null;
+  cache_creation_input_tokens: number | null;
+  context_cleared_tokens: number | null;
+  context_cleared_tool_uses: number | null;
   metadata: Record<string, any>;
   created_at: string;
 }
@@ -40,6 +47,12 @@ export async function GET(
         api_response_time_ms,
         tool_execution_time_ms,
         iteration_total_time_ms,
+        input_tokens,
+        output_tokens,
+        cache_read_input_tokens,
+        cache_creation_input_tokens,
+        context_cleared_tokens,
+        context_cleared_tool_uses,
         metadata,
         created_at
       `)

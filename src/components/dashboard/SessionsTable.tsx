@@ -37,6 +37,8 @@ interface Task {
   max_iterations: number | null;
   agent_status: string | null;
   duration_ms: number | null;
+  total_input_tokens: number | null;
+  total_output_tokens: number | null;
 }
 
 interface SessionsTableProps {
