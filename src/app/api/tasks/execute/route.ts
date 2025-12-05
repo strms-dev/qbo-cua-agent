@@ -9,7 +9,7 @@
  * Response: 202 Accepted with BatchExecutionResponse
  */
 
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { BatchExecutor } from '@/lib/batch-executor';
 import {
@@ -20,6 +20,10 @@ import {
 
 // Default max iterations from environment (same as chat route)
 const AGENT_MAX_ITERATIONS = parseInt(process.env.AGENT_MAX_ITERATIONS || '35', 10);
+
+// Extend function timeout for long-running batch executions
+// Vercel Hobby: 60s max, Pro/Enterprise: up to 300s
+export const maxDuration = 300;
 
 /**
  * API Key authentication middleware
@@ -226,9 +230,14 @@ export async function POST(request: NextRequest) {
     webhookSecret: body.webhookSecret,
   });
 
-  // Execute in background - don't await (fire and forget)
-  executor.execute().catch(error => {
-    console.error(`❌ BatchExecutor failed for batch ${batchExecutionId}:`, error);
+  // Use Next.js after() to extend function lifetime on Vercel
+  // This keeps the serverless function alive until execution completes
+  after(async () => {
+    try {
+      await executor.execute();
+    } catch (error) {
+      console.error(`❌ BatchExecutor failed for batch ${batchExecutionId}:`, error);
+    }
   });
 
   console.log(`🚀 BatchExecutor launched in background for batch: ${batchExecutionId}`);

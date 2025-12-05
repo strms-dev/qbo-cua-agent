@@ -27,7 +27,7 @@ export default function STRMSAgent() {
   };
 
   return (
-    <div className="h-screen flex bg-gray-100">
+    <div className="h-full flex bg-gray-100">
       {/* Thread History Sidebar */}
       <ThreadHistory
         currentSessionId={currentSessionId}
