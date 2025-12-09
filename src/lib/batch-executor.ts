@@ -305,6 +305,11 @@ export class BatchExecutor {
       anthropicModel: merged.ANTHROPIC_MODEL ?? DEFAULT_CONFIG.anthropicModel,
       typingDelayMs: merged.TYPING_DELAY_MS,
       onkernelTimeoutSeconds: merged.ONKERNEL_TIMEOUT_SECONDS,
+      onkernelProfileId: merged.ONKERNEL_PROFILE_ID,
+      // Context management overrides (optional - falls back to env defaults in samplingLoop)
+      contextTriggerTokens: merged.CONTEXT_TRIGGER_TOKENS,
+      contextKeepToolUses: merged.CONTEXT_KEEP_TOOL_USES,
+      contextClearMinTokens: merged.CONTEXT_CLEAR_MIN_TOKENS,
       webhookUrl: this.webhookUrl,
       webhookSecret: this.webhookSecret,
       batchExecutionId: this.batchExecutionId,
@@ -315,9 +320,11 @@ export class BatchExecutor {
 
   /**
    * Create browser session for the batch
+   * Uses profile ID from globalConfig if provided
    */
   private async createBrowserSession(): Promise<string> {
-    const session = await this.onkernelClient.createSession();
+    const profileId = this.globalConfig.ONKERNEL_PROFILE_ID;
+    const session = await this.onkernelClient.createSession(undefined, profileId);
     const browserSessionId = session.sessionId;
 
     // Insert browser session into database (required for CDP reconnection)

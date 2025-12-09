@@ -333,7 +333,7 @@ export class OnkernelClient {
     return null;
   }
 
-  async createSession(sessionId?: string) {
+  async createSession(sessionId?: string, profileId?: string) {
     console.log('🔄 Creating new browser session with Onkernel...');
     const startTime = Date.now();
     try {
@@ -356,28 +356,34 @@ export class OnkernelClient {
         ]
       };
 
-      // Only use profiles if enabled (requires startup/enterprise plan)
-      if (this.useProfiles) {
+      // Determine effective profile name:
+      // 1. Use explicit profileId if provided (from API config override)
+      // 2. Fall back to default profile name if ONKERNEL_USE_PROFILES=true
+      const effectiveProfileName = profileId || (this.useProfiles ? this.profileName : null);
+
+      // Only use profiles if we have a profile name to use
+      if (effectiveProfileName) {
         console.log('ℹ️ Profiles enabled - setting up authentication persistence');
+        console.log(`   Profile name: ${effectiveProfileName}${profileId ? ' (from API config)' : ' (default)'}`);
 
         // Ensure profile exists (idempotent operation)
         try {
-          await kernel.profiles.create({ name: this.profileName });
-          console.log('✅ Profile created:', this.profileName);
+          await kernel.profiles.create({ name: effectiveProfileName });
+          console.log('✅ Profile created:', effectiveProfileName);
         } catch (error: any) {
           // Profile may already exist, which is fine
           if (!error?.message?.includes('already exists')) {
-            console.log('ℹ️ Profile may already exist:', this.profileName);
+            console.log('ℹ️ Profile may already exist:', effectiveProfileName);
           }
         }
 
         browserOptions.profile = {
-          name: this.profileName,
+          name: effectiveProfileName,
           save_changes: true, // Persist auth state
         };
       } else {
         console.log('ℹ️ Profiles disabled - browsers will not persist authentication');
-        console.log('💡 To enable profiles, set ONKERNEL_USE_PROFILES=true after upgrading your plan');
+        console.log('💡 To enable profiles, set ONKERNEL_USE_PROFILES=true or pass ONKERNEL_PROFILE_ID in config');
       }
 
       // Enable browser persistence with session lifecycle (if configured)

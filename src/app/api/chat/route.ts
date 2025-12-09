@@ -935,6 +935,10 @@ export async function samplingLoopWithStreaming(
     anthropicModel: executionConfig?.anthropicModel ?? ANTHROPIC_MODEL,
     typingDelayMs: executionConfig?.typingDelayMs,
     onkernelTimeoutSeconds: executionConfig?.onkernelTimeoutSeconds,
+    // Context management overrides (falls back to env defaults if not specified)
+    contextTriggerTokens: executionConfig?.contextTriggerTokens ?? CONTEXT_TRIGGER_TOKENS,
+    contextKeepToolUses: executionConfig?.contextKeepToolUses ?? CONTEXT_KEEP_TOOL_USES,
+    contextClearMinTokens: executionConfig?.contextClearMinTokens ?? CONTEXT_CLEAR_MIN_TOKENS,
     webhookUrl: executionConfig?.webhookUrl,
     webhookSecret: executionConfig?.webhookSecret,
     batchExecutionId: executionConfig?.batchExecutionId,
@@ -1067,18 +1071,23 @@ export async function samplingLoopWithStreaming(
       apiRequest.betas = betasToUse;
 
       // Add context management configuration if enabled
+      // Uses effectiveConfig values (from API config overrides or env defaults)
       if (ENABLE_CONTEXT_MANAGEMENT) {
+        const effectiveContextTrigger = effectiveConfig.contextTriggerTokens ?? CONTEXT_TRIGGER_TOKENS;
+        const effectiveContextKeep = effectiveConfig.contextKeepToolUses ?? CONTEXT_KEEP_TOOL_USES;
+        const effectiveContextClearMin = effectiveConfig.contextClearMinTokens ?? CONTEXT_CLEAR_MIN_TOKENS;
+
         const contextConfig: any = {
           edits: [
             {
               type: "clear_tool_uses_20250919",
               keep: {
                 type: "tool_uses",
-                value: CONTEXT_KEEP_TOOL_USES
+                value: effectiveContextKeep
               },
               clear_at_least: {
                 type: "input_tokens",
-                value: CONTEXT_CLEAR_MIN_TOKENS
+                value: effectiveContextClearMin
               },
               exclude_tools: CONTEXT_EXCLUDE_TOOLS
             }
@@ -1086,19 +1095,19 @@ export async function samplingLoopWithStreaming(
         };
 
         // Only add trigger if explicitly set (0 = use Anthropic default ~100k)
-        if (CONTEXT_TRIGGER_TOKENS > 0) {
+        if (effectiveContextTrigger > 0) {
           contextConfig.edits[0].trigger = {
             type: "input_tokens",
-            value: CONTEXT_TRIGGER_TOKENS
+            value: effectiveContextTrigger
           };
         }
 
         apiRequest.context_management = contextConfig;
 
         console.log(`🧹 Context management enabled:`);
-        console.log(`   - Trigger: ${CONTEXT_TRIGGER_TOKENS || '~100k (default)'} tokens`);
-        console.log(`   - Keep: ${CONTEXT_KEEP_TOOL_USES} recent tool uses`);
-        console.log(`   - Clear min: ${CONTEXT_CLEAR_MIN_TOKENS} tokens`);
+        console.log(`   - Trigger: ${effectiveContextTrigger || '~100k (default)'} tokens`);
+        console.log(`   - Keep: ${effectiveContextKeep} recent tool uses`);
+        console.log(`   - Clear min: ${effectiveContextClearMin} tokens`);
         console.log(`   - Exclude tools: ${CONTEXT_EXCLUDE_TOOLS.join(', ')}`);
       }
 

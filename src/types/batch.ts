@@ -15,6 +15,11 @@ export interface ConfigOverrides {
   MAX_BASE64_SCREENSHOTS?: number;       // Screenshots in context (default: 3)
   KEEP_RECENT_THINKING_BLOCKS?: number;  // Thinking blocks to keep (default: 50)
 
+  // Anthropic Context Management (token-based cleanup)
+  CONTEXT_TRIGGER_TOKENS?: number;       // Token threshold to trigger cleanup (default: 15000, 0 = Anthropic default ~100k)
+  CONTEXT_KEEP_TOOL_USES?: number;       // Tool uses to keep after cleanup (default: 3)
+  CONTEXT_CLEAR_MIN_TOKENS?: number;     // Minimum tokens to clear (default: 5000)
+
   // Anthropic API Configuration
   THINKING_BUDGET_TOKENS?: number;       // Thinking budget (default: 2048)
   ANTHROPIC_MAX_TOKENS?: number;         // Max response tokens (default: 4096)
@@ -23,6 +28,7 @@ export interface ConfigOverrides {
   // OnKernel/Playwright Configuration
   TYPING_DELAY_MS?: number;              // Typing delay (default: 0)
   ONKERNEL_TIMEOUT_SECONDS?: number;     // Browser timeout (default: 60)
+  ONKERNEL_PROFILE_ID?: string;          // Browser profile name (default: 'qbo-auth' if ONKERNEL_USE_PROFILES=true)
 
   // System Prompt Override
   SYSTEM_PROMPT?: string;                // Custom system prompt (overrides default)
@@ -144,6 +150,11 @@ export interface ExecutionConfig {
   maxBase64Screenshots: number;         // Default: 3
   keepRecentThinkingBlocks: number;     // Default: 50
 
+  // Anthropic Context Management (token-based cleanup)
+  contextTriggerTokens?: number;        // Default: 15000 (0 = Anthropic default ~100k)
+  contextKeepToolUses?: number;         // Default: 3
+  contextClearMinTokens?: number;       // Default: 5000
+
   // Anthropic API Configuration
   thinkingBudgetTokens: number;         // Default: 2048
   anthropicMaxTokens: number;           // Default: 4096
@@ -152,6 +163,7 @@ export interface ExecutionConfig {
   // OnKernel Configuration (not directly used in samplingLoop, but part of config)
   typingDelayMs?: number;               // Default: 0 (handled by OnkernelClient)
   onkernelTimeoutSeconds?: number;      // Default: 60 (handled by OnkernelClient)
+  onkernelProfileId?: string;           // Browser profile name (default: 'qbo-auth' if ONKERNEL_USE_PROFILES=true)
 
   // Webhook configuration
   webhookUrl?: string;

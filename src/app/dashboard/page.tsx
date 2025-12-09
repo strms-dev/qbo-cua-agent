@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Clock, ListTodo, Activity, CheckCircle } from 'lucide-react';
+import { Clock, ListTodo, Activity, CheckCircle, Zap } from 'lucide-react';
 import type { DateRange } from 'react-day-picker';
 
 import { MetricCard } from '@/components/dashboard/MetricCard';
@@ -15,6 +15,8 @@ interface Session {
   total_conversation_time_ms: number | null;
   total_iterations: number | null;
   task_count: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
 }
 
 interface SessionsResponse {
@@ -37,6 +39,13 @@ function formatAvgTime(sessions: Session[]): string {
   if (avgMs < 1000) return `${avgMs.toFixed(0)}ms`;
   if (avgMs < 60000) return `${(avgMs / 1000).toFixed(1)}s`;
   return `${(avgMs / 60000).toFixed(1)}m`;
+}
+
+function formatTokens(tokens: number): string {
+  if (tokens === 0) return '0';
+  if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(1)}M`;
+  if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}k`;
+  return tokens.toString();
 }
 
 export default function DashboardPage() {
@@ -76,6 +85,8 @@ export default function DashboardPage() {
   const totalIterations = sessions.reduce((acc, s) => acc + (s.total_iterations || 0), 0);
   const totalTasks = sessions.reduce((acc, s) => acc + s.task_count, 0);
   const completedSessions = sessions.filter(s => s.status === 'completed').length;
+  const totalInputTokens = sessions.reduce((acc, s) => acc + (s.total_input_tokens || 0), 0);
+  const totalOutputTokens = sessions.reduce((acc, s) => acc + (s.total_output_tokens || 0), 0);
 
   return (
     <div className="container mx-auto py-8 px-4">
@@ -92,7 +103,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Metric Cards */}
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
           <MetricCard
             title="Total Sessions"
             value={total}
@@ -110,6 +121,12 @@ export default function DashboardPage() {
             value={totalIterations}
             description={`Across all sessions`}
             icon={<Activity className="h-4 w-4" />}
+          />
+          <MetricCard
+            title="Total Tokens"
+            value={formatTokens(totalInputTokens + totalOutputTokens)}
+            description={`In: ${formatTokens(totalInputTokens)} | Out: ${formatTokens(totalOutputTokens)}`}
+            icon={<Zap className="h-4 w-4" />}
           />
           <MetricCard
             title="Total Tasks"

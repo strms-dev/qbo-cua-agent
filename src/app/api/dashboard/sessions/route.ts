@@ -19,6 +19,8 @@ export interface SessionWithMetrics {
   total_iterations: number | null;
   completed_at: string | null;
   task_count: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
   metadata: Record<string, any>;
 }
 
@@ -61,17 +63,67 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // Transform response to flatten task count
-    const transformedSessions: SessionWithMetrics[] = (sessions || []).map((session: any) => ({
-      id: session.id,
-      created_at: session.created_at,
-      status: session.status,
-      total_conversation_time_ms: session.total_conversation_time_ms,
-      total_iterations: session.total_iterations,
-      completed_at: session.completed_at,
-      metadata: session.metadata,
-      task_count: session.tasks?.[0]?.count || 0,
-    }));
+    // Get session IDs for aggregation queries
+    const sessionIds = (sessions || []).map((s: any) => s.id);
+
+    // Aggregate task metrics per session (actual total time and iterations from tasks)
+    let sessionTaskMetrics: Record<string, { totalDurationMs: number; totalIterations: number }> = {};
+    if (sessionIds.length > 0) {
+      const { data: taskAggregates } = await supabase
+        .from('tasks')
+        .select('session_id, current_iteration, started_at, completed_at')
+        .in('session_id', sessionIds);
+
+      (taskAggregates || []).forEach((task: any) => {
+        if (!sessionTaskMetrics[task.session_id]) {
+          sessionTaskMetrics[task.session_id] = { totalDurationMs: 0, totalIterations: 0 };
+        }
+        // Add iterations
+        sessionTaskMetrics[task.session_id].totalIterations += task.current_iteration || 0;
+        // Add duration
+        if (task.started_at && task.completed_at) {
+          const duration = new Date(task.completed_at).getTime() - new Date(task.started_at).getTime();
+          sessionTaskMetrics[task.session_id].totalDurationMs += duration;
+        }
+      });
+    }
+
+    // Aggregate token metrics per session from performance_metrics
+    let sessionTokenMetrics: Record<string, { input: number; output: number }> = {};
+    if (sessionIds.length > 0) {
+      const { data: tokenAggregates } = await supabase
+        .from('performance_metrics')
+        .select('session_id, input_tokens, output_tokens')
+        .in('session_id', sessionIds);
+
+      (tokenAggregates || []).forEach((row: any) => {
+        if (!sessionTokenMetrics[row.session_id]) {
+          sessionTokenMetrics[row.session_id] = { input: 0, output: 0 };
+        }
+        sessionTokenMetrics[row.session_id].input += row.input_tokens || 0;
+        sessionTokenMetrics[row.session_id].output += row.output_tokens || 0;
+      });
+    }
+
+    // Transform response with aggregated metrics
+    const transformedSessions: SessionWithMetrics[] = (sessions || []).map((session: any) => {
+      const taskMetrics = sessionTaskMetrics[session.id];
+      const tokenMetrics = sessionTokenMetrics[session.id];
+
+      return {
+        id: session.id,
+        created_at: session.created_at,
+        status: session.status,
+        // Use aggregated task metrics instead of denormalized fields
+        total_conversation_time_ms: taskMetrics?.totalDurationMs || 0,
+        total_iterations: taskMetrics?.totalIterations || 0,
+        completed_at: session.completed_at,
+        metadata: session.metadata,
+        task_count: session.tasks?.[0]?.count || 0,
+        total_input_tokens: tokenMetrics?.input || 0,
+        total_output_tokens: tokenMetrics?.output || 0,
+      };
+    });
 
     return NextResponse.json({
       sessions: transformedSessions,

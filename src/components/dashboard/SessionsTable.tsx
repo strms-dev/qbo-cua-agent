@@ -22,6 +22,8 @@ interface Session {
   total_conversation_time_ms: number | null;
   total_iterations: number | null;
   task_count: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
 }
 
 interface Task {
@@ -48,10 +50,17 @@ interface SessionsTableProps {
 }
 
 function formatDuration(ms: number | null): string {
-  if (ms === null) return '-';
+  if (ms === null || ms === 0) return '-';
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
   return `${(ms / 60000).toFixed(1)}m`;
+}
+
+function formatTokens(tokens: number | null): string {
+  if (tokens === null || tokens === 0) return '-';
+  if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(1)}M`;
+  if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}k`;
+  return tokens.toString();
 }
 
 function formatDate(isoString: string): string {
@@ -135,13 +144,15 @@ export function SessionsTable({ sessions, loading, onRefresh }: SessionsTablePro
             <TableHead>Status</TableHead>
             <TableHead>Total Time</TableHead>
             <TableHead>Iterations</TableHead>
+            <TableHead>In Tokens</TableHead>
+            <TableHead>Out Tokens</TableHead>
             <TableHead>Tasks</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {sessions.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={7} className="text-center text-muted-foreground">
+              <TableCell colSpan={9} className="text-center text-muted-foreground">
                 No sessions found
               </TableCell>
             </TableRow>
@@ -178,13 +189,19 @@ export function SessionsTable({ sessions, loading, onRefresh }: SessionsTablePro
                   <TableCell className="font-mono">
                     {session.total_iterations ?? '-'}
                   </TableCell>
+                  <TableCell className="font-mono text-blue-600">
+                    {formatTokens(session.total_input_tokens)}
+                  </TableCell>
+                  <TableCell className="font-mono text-green-600">
+                    {formatTokens(session.total_output_tokens)}
+                  </TableCell>
                   <TableCell className="font-mono">
                     {session.task_count}
                   </TableCell>
                 </TableRow>
                 {expandedSessions.has(session.id) && (
                   <TableRow>
-                    <TableCell colSpan={7} className="p-0">
+                    <TableCell colSpan={9} className="p-0">
                       <div className="pl-12 pr-4 py-4">
                         <h4 className="text-sm font-medium mb-2">Tasks</h4>
                         <TasksTable
