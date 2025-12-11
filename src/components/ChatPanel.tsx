@@ -112,6 +112,52 @@ export default function ChatPanel({
     };
   }, [sessionId, isStreamingSSE]);
 
+  // Subscribe to task status changes for batch context updates
+  // Updates the batch counter and task indicators in real-time
+  useEffect(() => {
+    if (!batchContext?.batchExecutionId) return;
+
+    console.log('🔔 Setting up Realtime subscription for batch tasks:', batchContext.batchExecutionId);
+
+    const channel = supabaseBrowser
+      .channel(`batch-tasks:${batchContext.batchExecutionId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'tasks',
+          filter: `batch_execution_id=eq.${batchContext.batchExecutionId}`,
+        },
+        (payload) => {
+          const updatedTask = payload.new as any;
+          console.log('📊 Batch task status update:', updatedTask.id, updatedTask.status);
+
+          setBatchContext((prev: any) => {
+            if (!prev) return prev;
+            const updatedTasks = prev.tasks.map((t: any) =>
+              t.id === updatedTask.id ? { ...t, status: updatedTask.status } : t
+            );
+            const newCompletedCount = updatedTasks.filter((t: any) => t.status === 'completed').length;
+            console.log(`📈 Batch progress: ${newCompletedCount}/${prev.totalTasks} tasks completed`);
+            return {
+              ...prev,
+              tasks: updatedTasks,
+              completedTasks: newCompletedCount
+            };
+          });
+        }
+      )
+      .subscribe((status) => {
+        console.log('🔔 Batch tasks Realtime subscription status:', status);
+      });
+
+    return () => {
+      console.log('🔕 Cleaning up batch tasks Realtime subscription');
+      supabaseBrowser.removeChannel(channel);
+    };
+  }, [batchContext?.batchExecutionId]);
+
   const loadSessionMessages = async (sid: string) => {
     setIsLoadingHistory(true);
     try {
@@ -1013,16 +1059,17 @@ export default function ChatPanel({
                   {batchContext.tasks.map((task: any, index: number) => (
                     <div key={task.id} className="flex items-center gap-1">
                       <span className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-xs font-medium ${
-                        task.id === batchContext.currentTaskId
-                          ? 'bg-blue-500 text-white ring-2 ring-blue-300'
-                          : task.status === 'completed'
+                        // Terminal states (completed/failed) take priority over "current task" styling
+                        task.status === 'completed'
                           ? 'bg-green-500 text-white'
+                          : task.status === 'failed'
+                          ? 'bg-red-500 text-white'
+                          : task.id === batchContext.currentTaskId
+                          ? 'bg-blue-500 text-white ring-2 ring-blue-300'
                           : task.status === 'running'
                           ? 'bg-blue-400 text-white animate-pulse'
                           : task.status === 'paused'
                           ? 'bg-yellow-400 text-white'
-                          : task.status === 'failed'
-                          ? 'bg-red-500 text-white'
                           : 'bg-gray-300 text-gray-600'
                       }`}>
                         {index + 1}

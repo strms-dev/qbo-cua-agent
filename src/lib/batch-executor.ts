@@ -109,10 +109,41 @@ export class BatchExecutor {
 
         try {
           await this.executeTask(task, taskId, i);
-          console.log(`✅ Task ${i + 1} completed successfully`);
 
-          // Update completed count
-          await this.incrementBatchCount('completed');
+          // Query actual task status from database after execution
+          const { data: taskData } = await supabase
+            .from('tasks')
+            .select('status')
+            .eq('id', taskId)
+            .single();
+
+          let finalStatus = taskData?.status;
+
+          // If task is paused (needs_clarification), wait for user intervention
+          if (finalStatus === 'paused') {
+            finalStatus = await this.waitForTaskCompletion(taskId);
+
+            // Update task in database if it timed out
+            if (finalStatus === 'failed') {
+              await supabase
+                .from('tasks')
+                .update({
+                  status: 'failed',
+                  completed_at: new Date().toISOString(),
+                  result_message: 'Task timed out waiting for user intervention'
+                })
+                .eq('id', taskId);
+            }
+          }
+
+          // Update counts based on final status
+          if (finalStatus === 'completed') {
+            console.log(`✅ Task ${i + 1} completed successfully`);
+            await this.incrementBatchCount('completed');
+          } else {
+            console.log(`❌ Task ${i + 1} ended with status: ${finalStatus}`);
+            await this.incrementBatchCount('failed');
+          }
 
         } catch (error: any) {
           console.error(`❌ Task ${i + 1} failed:`, error.message);
@@ -418,5 +449,51 @@ export class BatchExecutor {
    */
   private buildSystemPrompt(customPrompt?: string): string {
     return customPrompt || DEFAULT_SYSTEM_PROMPT;
+  }
+
+  /**
+   * Wait for a paused task to be completed or failed (user intervention)
+   * Polls database until task status changes from 'paused'
+   *
+   * @param taskId - The task ID to monitor
+   * @param pollIntervalMs - Interval between status checks (default: 5 seconds)
+   * @param timeoutMs - Maximum time to wait (default: 30 minutes)
+   * @returns The final status when task is no longer paused
+   */
+  private async waitForTaskCompletion(
+    taskId: string,
+    pollIntervalMs: number = 5000,
+    timeoutMs: number = 1800000 // 30 minutes
+  ): Promise<'completed' | 'failed' | 'stopped'> {
+    const startTime = Date.now();
+
+    console.log(`⏳ Task ${taskId} is paused. Waiting for user intervention...`);
+
+    while (Date.now() - startTime < timeoutMs) {
+      await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+
+      const { data: task } = await supabase
+        .from('tasks')
+        .select('status')
+        .eq('id', taskId)
+        .single();
+
+      const status = task?.status;
+
+      if (status === 'completed' || status === 'failed' || status === 'stopped') {
+        console.log(`✅ Task ${taskId} status changed to: ${status}`);
+        return status;
+      }
+
+      // Log progress every minute (12 polls at 5 second intervals)
+      const elapsedMs = Date.now() - startTime;
+      if (elapsedMs % 60000 < pollIntervalMs) {
+        const elapsedMinutes = Math.floor(elapsedMs / 60000);
+        console.log(`⏳ Still waiting for task ${taskId} (status: ${status}, elapsed: ${elapsedMinutes}m)...`);
+      }
+    }
+
+    console.log(`⚠️ Timeout waiting for task ${taskId}. Treating as failed.`);
+    return 'failed';
   }
 }
