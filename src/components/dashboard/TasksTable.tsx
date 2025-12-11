@@ -36,6 +36,7 @@ interface Task {
   duration_ms: number | null;
   total_input_tokens: number | null;
   total_output_tokens: number | null;
+  total_cost: number | null;
 }
 
 interface Iteration {
@@ -151,6 +152,7 @@ export function TasksTable({ tasks, loading }: TasksTableProps) {
             <TableHead>Iterations</TableHead>
             <TableHead>In Tokens</TableHead>
             <TableHead>Out Tokens</TableHead>
+            <TableHead>Cost</TableHead>
             <TableHead>Agent Status</TableHead>
           </TableRow>
         </TableHeader>
@@ -205,6 +207,9 @@ export function TasksTable({ tasks, loading }: TasksTableProps) {
                 <TableCell className="font-mono text-green-600">
                   {formatTokens(task.total_output_tokens)}
                 </TableCell>
+                <TableCell className="font-mono text-emerald-600">
+                  {task.total_cost != null ? `$${task.total_cost.toFixed(2)}` : '-'}
+                </TableCell>
                 <TableCell>
                   {task.agent_status && (
                     <Badge variant={task.agent_status === 'completed' ? 'default' : 'outline'}>
@@ -215,7 +220,7 @@ export function TasksTable({ tasks, loading }: TasksTableProps) {
               </TableRow>
               {expandedTasks.has(task.id) && (
                 <TableRow>
-                  <TableCell colSpan={9} className="p-0">
+                  <TableCell colSpan={10} className="p-0">
                     <div className="pl-12 pr-4 py-4">
                       <h4 className="text-sm font-medium mb-2">Iterations</h4>
                       <IterationsTable

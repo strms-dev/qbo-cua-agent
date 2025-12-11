@@ -924,6 +924,26 @@ export async function samplingLoopWithStreaming(
   let finalResponse = '';
   let conversationHistory: any[] = [];
 
+  // Fetch pricing from anthropic_pricing table (used for cost calculation per iteration)
+  let pricing = {
+    input_price_per_mtok: 3.0,
+    output_price_per_mtok: 15.0,
+    cache_read_price_per_mtok: 0.3,
+    cache_write_price_per_mtok: 3.75,
+  };
+  try {
+    const { data: pricingData } = await supabase
+      .from('anthropic_pricing')
+      .select('input_price_per_mtok, output_price_per_mtok, cache_read_price_per_mtok, cache_write_price_per_mtok')
+      .eq('is_default', true)
+      .single();
+    if (pricingData) {
+      pricing = pricingData;
+    }
+  } catch (error) {
+    console.error('⚠️ Failed to fetch pricing, using defaults:', error);
+  }
+
   // Build effective execution config (use provided config or fallback to env vars)
   const effectiveConfig: ExecutionConfig = {
     agentMaxIterations: executionConfig?.agentMaxIterations ?? AGENT_MAX_ITERATIONS,
@@ -1731,6 +1751,71 @@ export async function samplingLoopWithStreaming(
               }
             });
           console.log('✅ Performance metrics saved for iteration', iteration + 1);
+
+          // Increment token totals in task and session tables
+          const iterationInputTokens = response.usage?.input_tokens ?? 0;
+          const iterationOutputTokens = response.usage?.output_tokens ?? 0;
+          const iterationCacheReadTokens = (response.usage as any)?.cache_read_input_tokens ?? 0;
+          const iterationCacheWriteTokens = (response.usage as any)?.cache_creation_input_tokens ?? 0;
+
+          // Calculate iteration cost
+          const iterationCost = (
+            (iterationInputTokens * pricing.input_price_per_mtok) +
+            (iterationOutputTokens * pricing.output_price_per_mtok) +
+            (iterationCacheReadTokens * pricing.cache_read_price_per_mtok) +
+            (iterationCacheWriteTokens * pricing.cache_write_price_per_mtok)
+          ) / 1_000_000;
+
+          // Update task token totals
+          if (taskId && !sessionId.startsWith('fallback-')) {
+            try {
+              const { data: currentTask } = await supabase
+                .from('tasks')
+                .select('total_input_tokens, total_output_tokens, total_cache_read_tokens, total_cache_write_tokens, total_cost')
+                .eq('id', taskId)
+                .single();
+
+              await supabase
+                .from('tasks')
+                .update({
+                  total_input_tokens: (currentTask?.total_input_tokens || 0) + iterationInputTokens,
+                  total_output_tokens: (currentTask?.total_output_tokens || 0) + iterationOutputTokens,
+                  total_cache_read_tokens: (currentTask?.total_cache_read_tokens || 0) + iterationCacheReadTokens,
+                  total_cache_write_tokens: (currentTask?.total_cache_write_tokens || 0) + iterationCacheWriteTokens,
+                  total_cost: parseFloat(((currentTask?.total_cost || 0) + iterationCost).toFixed(4))
+                })
+                .eq('id', taskId);
+              console.log(`💰 Task ${taskId} token totals updated (+${iterationInputTokens} in, +${iterationOutputTokens} out, +$${iterationCost.toFixed(4)})`);
+            } catch (error) {
+              console.error('⚠️ Failed to update task token totals:', error);
+            }
+          }
+
+          // Update session token totals and last_activity_at
+          if (!sessionId.startsWith('fallback-')) {
+            try {
+              const { data: currentSession } = await supabase
+                .from('chat_sessions')
+                .select('total_input_tokens, total_output_tokens, total_cache_read_tokens, total_cache_write_tokens, total_cost')
+                .eq('id', sessionId)
+                .single();
+
+              await supabase
+                .from('chat_sessions')
+                .update({
+                  total_input_tokens: (currentSession?.total_input_tokens || 0) + iterationInputTokens,
+                  total_output_tokens: (currentSession?.total_output_tokens || 0) + iterationOutputTokens,
+                  total_cache_read_tokens: (currentSession?.total_cache_read_tokens || 0) + iterationCacheReadTokens,
+                  total_cache_write_tokens: (currentSession?.total_cache_write_tokens || 0) + iterationCacheWriteTokens,
+                  total_cost: parseFloat(((currentSession?.total_cost || 0) + iterationCost).toFixed(4)),
+                  last_activity_at: new Date().toISOString()
+                })
+                .eq('id', sessionId);
+              console.log(`💰 Session ${sessionId} token totals updated (+${iterationInputTokens} in, +${iterationOutputTokens} out, +$${iterationCost.toFixed(4)})`);
+            } catch (error) {
+              console.error('⚠️ Failed to update session token totals:', error);
+            }
+          }
         } catch (error) {
           console.error('⚠️ Failed to save performance metrics:', error);
         }
@@ -1762,17 +1847,19 @@ export async function samplingLoopWithStreaming(
           }
         }
 
-        // Update chat session with completion metrics (keep session active)
+        // Update chat session with completion metrics and mark as completed
         if (!sessionId.startsWith('fallback-')) {
           try {
             await supabase
               .from('chat_sessions')
               .update({
+                status: 'completed',
+                completed_at: new Date().toISOString(),
                 total_conversation_time_ms: totalConversationTimeMs,
                 total_iterations: iteration + 1
               })
               .eq('id', sessionId);
-            console.log('✅ Chat session updated with metrics (session remains active)');
+            console.log('✅ Chat session marked as completed with metrics');
           } catch (error) {
             console.error('⚠️ Failed to update chat session:', error);
           }
@@ -1841,6 +1928,7 @@ export async function samplingLoopWithStreaming(
                 type: 'task_status' as const,
                 batchExecutionId: effectiveConfig.batchExecutionId || taskRecord?.batch_execution_id || '',
                 sessionId: sessionId,
+                browserSessionId: browserSessionId,
                 sessionUrl: `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/sessions/${sessionId}/access`,
                 taskId: taskId,
                 taskIndex: effectiveConfig.taskIndex ?? taskRecord?.task_index ?? 0,
@@ -2040,7 +2128,8 @@ export async function POST(req: Request) {
           .from('chat_sessions')
           .insert({
             status: 'active',
-            metadata: { started_at: new Date().toISOString() }
+            metadata: { started_at: new Date().toISOString() },
+            last_activity_at: new Date().toISOString()
           })
           .select()
           .single();
@@ -2049,6 +2138,29 @@ export async function POST(req: Request) {
       } catch (error) {
         console.error('⚠️ Failed to create chat session:', error);
         currentSessionId = 'fallback-session-' + Date.now();
+      }
+    } else {
+      // Check session status and timeout for existing sessions
+      try {
+        const { data: existingSession } = await supabase
+          .from('chat_sessions')
+          .select('status, last_activity_at')
+          .eq('id', sessionId)
+          .single();
+
+        if (existingSession?.status === 'completed') {
+          return Response.json(
+            { error: 'Session completed', message: 'This session has been completed. Please start a new session.' },
+            { status: 400 }
+          );
+        }
+
+        // Note: Removed 2-minute inactivity timeout - sessions now complete via:
+        // 1. Agent's report_task_status tool (completed/failed)
+        // 2. Browser session expiry on OnKernel
+      } catch (error) {
+        console.error('⚠️ Error checking session status:', error);
+        // Continue anyway - don't block on session check errors
       }
     }
 

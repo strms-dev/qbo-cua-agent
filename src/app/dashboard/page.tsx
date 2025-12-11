@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Clock, ListTodo, Activity, CheckCircle, Zap } from 'lucide-react';
+import { Clock, ListTodo, Activity, CheckCircle, Zap, DollarSign } from 'lucide-react';
 import type { DateRange } from 'react-day-picker';
 
 import { MetricCard } from '@/components/dashboard/MetricCard';
@@ -17,6 +17,7 @@ interface Session {
   task_count: number;
   total_input_tokens: number;
   total_output_tokens: number;
+  total_cost: number;
 }
 
 interface SessionsResponse {
@@ -87,6 +88,7 @@ export default function DashboardPage() {
   const completedSessions = sessions.filter(s => s.status === 'completed').length;
   const totalInputTokens = sessions.reduce((acc, s) => acc + (s.total_input_tokens || 0), 0);
   const totalOutputTokens = sessions.reduce((acc, s) => acc + (s.total_output_tokens || 0), 0);
+  const totalCost = sessions.reduce((acc, s) => acc + (s.total_cost || 0), 0);
 
   return (
     <div className="container mx-auto py-8 px-4">
@@ -103,7 +105,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Metric Cards */}
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-6">
           <MetricCard
             title="Total Sessions"
             value={total}
@@ -127,6 +129,12 @@ export default function DashboardPage() {
             value={formatTokens(totalInputTokens + totalOutputTokens)}
             description={`In: ${formatTokens(totalInputTokens)} | Out: ${formatTokens(totalOutputTokens)}`}
             icon={<Zap className="h-4 w-4" />}
+          />
+          <MetricCard
+            title="Total Cost"
+            value={`$${totalCost.toFixed(2)}`}
+            description="Anthropic API usage"
+            icon={<DollarSign className="h-4 w-4" />}
           />
           <MetricCard
             title="Total Tasks"

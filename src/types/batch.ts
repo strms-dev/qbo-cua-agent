@@ -101,6 +101,9 @@ export interface WebhookPayload {
   /** Chat session ID - allows identifying the session */
   sessionId: string;
 
+  /** Browser session ID - use this when calling /api/chat to resume the task */
+  browserSessionId: string;
+
   /** Direct URL to access the chat session UI */
   sessionUrl: string;
 

@@ -24,6 +24,7 @@ interface Session {
   task_count: number;
   total_input_tokens: number;
   total_output_tokens: number;
+  total_cost: number;
 }
 
 interface Task {
@@ -41,6 +42,7 @@ interface Task {
   duration_ms: number | null;
   total_input_tokens: number | null;
   total_output_tokens: number | null;
+  total_cost: number | null;
 }
 
 interface SessionsTableProps {
@@ -146,13 +148,14 @@ export function SessionsTable({ sessions, loading, onRefresh }: SessionsTablePro
             <TableHead>Iterations</TableHead>
             <TableHead>In Tokens</TableHead>
             <TableHead>Out Tokens</TableHead>
+            <TableHead>Cost</TableHead>
             <TableHead>Tasks</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {sessions.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={9} className="text-center text-muted-foreground">
+              <TableCell colSpan={10} className="text-center text-muted-foreground">
                 No sessions found
               </TableCell>
             </TableRow>
@@ -195,13 +198,16 @@ export function SessionsTable({ sessions, loading, onRefresh }: SessionsTablePro
                   <TableCell className="font-mono text-green-600">
                     {formatTokens(session.total_output_tokens)}
                   </TableCell>
+                  <TableCell className="font-mono text-emerald-600">
+                    ${session.total_cost?.toFixed(2) ?? '-'}
+                  </TableCell>
                   <TableCell className="font-mono">
                     {session.task_count}
                   </TableCell>
                 </TableRow>
                 {expandedSessions.has(session.id) && (
                   <TableRow>
-                    <TableCell colSpan={9} className="p-0">
+                    <TableCell colSpan={10} className="p-0">
                       <div className="pl-12 pr-4 py-4">
                         <h4 className="text-sm font-medium mb-2">Tasks</h4>
                         <TasksTable
