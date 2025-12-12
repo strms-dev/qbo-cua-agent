@@ -58,7 +58,7 @@ export class OnkernelClient {
     this.browserTimeout = (!isNaN(parsedTimeout) && parsedTimeout > 0) ? parsedTimeout : 60;
 
     console.log('🔧 OnkernelClient initialized:');
-    console.log('  - SDK Version: @onkernel/sdk@0.14.0');
+    console.log('  - SDK Version: @onkernel/sdk@0.22.0');
     console.log('  - ONKERNEL_USE_PROFILES:', this.useProfiles);
     console.log('  - BROWSER_PERSISTENCE:', this.usePersistence);
     console.log('  - TYPING_DELAY_MS env var:', delayEnv);
@@ -680,8 +680,24 @@ export class OnkernelClient {
           }
           // Normalize key input (handles combinations like "ctrl+a" → "Control+a")
           const normalizedKey = this.parseKeyInput(action.text);
-          await page.keyboard.press(normalizedKey);
-          console.log('✅ Pressed key:', normalizedKey, '(original:', action.text, ')');
+
+          // Chrome tab shortcuts (Ctrl+W, Ctrl+T) don't work reliably with Playwright
+          // Use OnKernel's native pressKey() for these specific shortcuts
+          const isChromeTabShortcut = /^Control\+(w|t)$/i.test(normalizedKey);
+
+          if (isChromeTabShortcut) {
+            // Use OnKernel's native pressKey method for Chrome tab shortcuts
+            // Convert 'Control+t' to 'Ctrl+t' format expected by OnKernel API
+            const onkernelKey = normalizedKey.replace('Control+', 'Ctrl+');
+            console.log('🔧 Using native OnKernel pressKey for Chrome shortcut:', onkernelKey);
+            const kernel = this.getKernel();
+            await kernel.browsers.computer.pressKey(sessionId, { keys: [onkernelKey] });
+            console.log('✅ Pressed key via OnKernel:', onkernelKey, '(original:', action.text, ')');
+          } else {
+            // Use Playwright for all other keys
+            await page.keyboard.press(normalizedKey);
+            console.log('✅ Pressed key via Playwright:', normalizedKey, '(original:', action.text, ')');
+          }
           return { success: true };
 
         case 'scroll':
