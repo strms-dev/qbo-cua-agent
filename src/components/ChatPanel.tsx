@@ -38,9 +38,6 @@ export default function ChatPanel({
   const isBatchRunning = batchContext?.status === 'running' ||
     (batchContext?.tasks?.some((t: any) => t.status === 'running') ?? false);
 
-  // Statuses where the agent is not actively working and loading should be cleared
-  const INACTIVE_TASK_STATUSES = ['completed', 'failed', 'stopped', 'paused'];
-
   const toggleThinking = (messageId: string) => {
     setExpandedThinking(prev => ({
       ...prev,
@@ -163,16 +160,16 @@ export default function ChatPanel({
             const hasRunningTask = updatedTasks.some((t: any) => t.status === 'running');
 
             // Mark that we should clear loading (don't call setState inside callback!)
-            if (INACTIVE_TASK_STATUSES.includes(updatedTask.status) && !hasRunningTask) {
+            if (['completed', 'failed', 'stopped'].includes(updatedTask.status) && !hasRunningTask) {
               shouldClearLoading = true;
             }
 
             const newCompletedCount = updatedTasks.filter((t: any) => t.status === 'completed').length;
             console.log(`📈 Batch progress: ${newCompletedCount}/${prev.totalTasks} tasks completed`);
 
-            // Check if all tasks are in terminal state (not running)
+            // Check if all tasks are in terminal state (completed/failed/stopped)
             const allTasksTerminal = updatedTasks.every((t: any) =>
-              INACTIVE_TASK_STATUSES.includes(t.status)
+              ['completed', 'failed', 'stopped'].includes(t.status)
             );
 
             return {
@@ -201,9 +198,9 @@ export default function ChatPanel({
     };
   }, [batchContext?.batchExecutionId]);
 
-  // Safety effect: ensure loading is cleared when batch is not actively running
+  // Safety effect: ensure loading is cleared when batch completes
   useEffect(() => {
-    if (batchContext?.status && INACTIVE_TASK_STATUSES.includes(batchContext.status)) {
+    if (batchContext?.status && ['completed', 'failed', 'stopped'].includes(batchContext.status)) {
       if (isLoading) {
         console.log(`🛑 Batch status is ${batchContext.status} but isLoading=true - clearing loading state`);
         setIsLoading(false);
@@ -326,9 +323,9 @@ export default function ChatPanel({
                   console.log('📦 Batch is running but no active task detected yet - setting loading state');
                   setIsLoading(true);
                   onAgentActiveChange(true);
-                } else if (INACTIVE_TASK_STATUSES.includes(batchData.batchExecution.status)) {
-                  // Batch is not actively running - ensure loading is cleared
-                  console.log(`✅ Batch is ${batchData.batchExecution.status} - clearing loading state`);
+                } else if (['completed', 'failed', 'stopped'].includes(batchData.batchExecution.status)) {
+                  // Batch is already completed - ensure loading is cleared
+                  console.log(`✅ Batch already ${batchData.batchExecution.status} - clearing loading state`);
                   setIsLoading(false);
                   onAgentActiveChange(false);
                 }
