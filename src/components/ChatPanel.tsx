@@ -429,7 +429,9 @@ export default function ChatPanel({
               // Reconnect to SSE stream for the active task
               await connectToRunningTask(batchData.activeTask.id, sid);
             } else if (batchData.activeTask.status === 'paused') {
-              console.log('⏸️ Batch task is paused');
+              console.log('⏸️ Batch task is paused - clearing loading so user can respond');
+              setIsLoading(false);
+              onAgentActiveChange(false);
             }
             return;
           }
