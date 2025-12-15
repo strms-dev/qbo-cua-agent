@@ -34,6 +34,10 @@ export default function ChatPanel({
   const [isStreamingSSE, setIsStreamingSSE] = useState(false); // Track when SSE is active to pause Realtime
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Derived value: check if batch execution is running (either batch status or any task running)
+  const isBatchRunning = batchContext?.status === 'running' ||
+    (batchContext?.tasks?.some((t: any) => t.status === 'running') ?? false);
+
   const toggleThinking = (messageId: string) => {
     setExpandedThinking(prev => ({
       ...prev,
@@ -133,19 +137,55 @@ export default function ChatPanel({
           const updatedTask = payload.new as any;
           console.log('📊 Batch task status update:', updatedTask.id, updatedTask.status);
 
+          // Set isLoading when a task starts running
+          if (updatedTask.status === 'running') {
+            console.log('🔄 Task started running, enabling loading state');
+            setIsLoading(true);
+            onAgentActiveChange(true);
+            setCurrentTaskId(updatedTask.id);
+            setTaskStatus('running');
+          }
+
+          // Track if we need to clear loading state (set inside callback, used outside)
+          let shouldClearLoading = false;
+
+          // Update batch context
           setBatchContext((prev: any) => {
             if (!prev) return prev;
             const updatedTasks = prev.tasks.map((t: any) =>
               t.id === updatedTask.id ? { ...t, status: updatedTask.status } : t
             );
+
+            // Check if any task is still running after this update
+            const hasRunningTask = updatedTasks.some((t: any) => t.status === 'running');
+
+            // Mark that we should clear loading (don't call setState inside callback!)
+            if (['completed', 'failed', 'stopped'].includes(updatedTask.status) && !hasRunningTask) {
+              shouldClearLoading = true;
+            }
+
             const newCompletedCount = updatedTasks.filter((t: any) => t.status === 'completed').length;
             console.log(`📈 Batch progress: ${newCompletedCount}/${prev.totalTasks} tasks completed`);
+
+            // Check if all tasks are in terminal state (completed/failed/stopped)
+            const allTasksTerminal = updatedTasks.every((t: any) =>
+              ['completed', 'failed', 'stopped'].includes(t.status)
+            );
+
             return {
               ...prev,
+              status: allTasksTerminal ? 'completed' : prev.status,
               tasks: updatedTasks,
               completedTasks: newCompletedCount
             };
           });
+
+          // Clear loading state AFTER setBatchContext (avoids "setState during render" error)
+          if (shouldClearLoading) {
+            console.log('✅ No more running tasks, clearing loading state');
+            setIsLoading(false);
+            onAgentActiveChange(false);
+          }
         }
       )
       .subscribe((status) => {
@@ -157,6 +197,17 @@ export default function ChatPanel({
       supabaseBrowser.removeChannel(channel);
     };
   }, [batchContext?.batchExecutionId]);
+
+  // Safety effect: ensure loading is cleared when batch completes
+  useEffect(() => {
+    if (batchContext?.status && ['completed', 'failed', 'stopped'].includes(batchContext.status)) {
+      if (isLoading) {
+        console.log(`🛑 Batch status is ${batchContext.status} but isLoading=true - clearing loading state`);
+        setIsLoading(false);
+        onAgentActiveChange(false);
+      }
+    }
+  }, [batchContext?.status, isLoading, onAgentActiveChange]);
 
   const loadSessionMessages = async (sid: string) => {
     setIsLoadingHistory(true);
@@ -205,6 +256,90 @@ export default function ChatPanel({
     try {
       console.log('🔍 Checking for active tasks in session:', sid);
 
+      // FIRST: Check if there's a batch_execution for this session directly
+      // This avoids the race condition where messages haven't been saved yet
+      try {
+        const batchCheckResponse = await fetch(`/api/sessions/${sid}/batch`);
+        if (batchCheckResponse.ok) {
+          const batchInfo = await batchCheckResponse.json();
+          if (batchInfo.batchExecutionId) {
+            console.log('📦 Found batch execution for session (direct query):', batchInfo.batchExecutionId);
+
+            // Fetch full batch status
+            const batchResponse = await fetch(`/api/batch-executions/${batchInfo.batchExecutionId}/status`);
+            if (batchResponse.ok) {
+              const batchData = await batchResponse.json();
+              console.log('📦 Batch status:', batchData);
+
+              // Store batch context for UI
+              setBatchContext({
+                batchExecutionId: batchData.batchExecution.id,
+                status: batchData.batchExecution.status,
+                totalTasks: batchData.batchExecution.totalTasks,
+                completedTasks: batchData.batchExecution.completedTasks,
+                tasks: batchData.tasks,
+                currentTaskId: batchData.activeTask?.id || null,
+              });
+
+              // Load browser session from batch execution
+              if (batchData.batchExecution.browserSessionId) {
+                console.log('🌐 Loading browser session from batch:', batchData.batchExecution.browserSessionId);
+
+                try {
+                  const browserStatusResponse = await fetch(`/api/browser/${batchData.batchExecution.browserSessionId}/status`);
+                  if (browserStatusResponse.ok) {
+                    const browserStatus = await browserStatusResponse.json();
+                    console.log('✅ Browser session loaded:', browserStatus);
+
+                    // Update parent with browser session info
+                    onBrowserSessionChange(batchData.batchExecution.browserSessionId);
+                    if (browserStatus.browserUrl) {
+                      onStreamUrlChange(browserStatus.browserUrl);
+                      console.log('🔗 Browser live view URL set:', browserStatus.browserUrl);
+                    }
+                  }
+                } catch (error) {
+                  console.error('⚠️ Failed to load browser session:', error);
+                }
+              }
+
+              // If there's an active task in the batch
+              if (batchData.hasActiveTask && batchData.activeTask) {
+                console.log('🔄 Found active task in batch:', batchData.activeTask.id);
+                setCurrentTaskId(batchData.activeTask.id);
+                setTaskStatus(batchData.activeTask.status);
+
+                if (batchData.activeTask.status === 'running') {
+                  setIsLoading(true);
+                  onAgentActiveChange(true);
+                  // Reconnect to SSE stream for the active task
+                  await connectToRunningTask(batchData.activeTask.id, sid);
+                } else if (batchData.activeTask.status === 'paused') {
+                  console.log('⏸️ Batch task is paused');
+                }
+              } else {
+                // Batch exists but no active task
+                if (batchData.batchExecution.status === 'running') {
+                  console.log('📦 Batch is running but no active task detected yet - setting loading state');
+                  setIsLoading(true);
+                  onAgentActiveChange(true);
+                } else if (['completed', 'failed', 'stopped'].includes(batchData.batchExecution.status)) {
+                  // Batch is already completed - ensure loading is cleared
+                  console.log(`✅ Batch already ${batchData.batchExecution.status} - clearing loading state`);
+                  setIsLoading(false);
+                  onAgentActiveChange(false);
+                }
+              }
+
+              return; // Batch detected and handled, no need to check messages
+            }
+          }
+        }
+      } catch (batchCheckError) {
+        console.log('ℹ️ Batch check failed, falling back to message-based detection:', batchCheckError);
+      }
+
+      // FALLBACK: Check messages for task_id (original logic)
       // Fetch session data which includes task information
       const response = await fetch(`/api/sessions/${sid}`);
       if (!response.ok) return;
@@ -245,6 +380,7 @@ export default function ChatPanel({
           // Store batch context for UI
           setBatchContext({
             batchExecutionId: batchData.batchExecution.id,
+            status: batchData.batchExecution.status,
             totalTasks: batchData.batchExecution.totalTasks,
             completedTasks: batchData.batchExecution.completedTasks,
             tasks: batchData.tasks,
@@ -684,6 +820,63 @@ export default function ChatPanel({
   };
 
   const handleStop = async () => {
+    // Check if we're in batch context - if so, stop the entire batch
+    if (batchContext?.batchExecutionId) {
+      console.log('🛑 Stopping batch execution:', batchContext.batchExecutionId);
+
+      try {
+        const response = await fetch(`/api/batch-executions/${batchContext.batchExecutionId}/stop`, {
+          method: 'POST',
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to stop batch: ${response.status}`);
+        }
+
+        const data = await response.json();
+        console.log('✅ Batch stopped:', data);
+
+        // Update UI state
+        setIsLoading(false);
+        onAgentActiveChange(false);
+        setTaskStatus('stopped');
+
+        // Update batch context to show all tasks as stopped and batch status
+        setBatchContext((prev: any) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            status: 'stopped',
+            tasks: prev.tasks.map((t: any) => ({
+              ...t,
+              status: t.status === 'completed' || t.status === 'failed' ? t.status : 'stopped'
+            }))
+          };
+        });
+
+        // Add system message about batch stop
+        const stopMessage = {
+          id: (Date.now() + Math.random()).toString(),
+          role: 'assistant',
+          content: `🛑 Batch execution stopped by user. ${data.cancelledTaskCount || 0} queued task(s) were cancelled. You can start a new batch or continue with individual tasks.`
+        };
+        setMessages(prev => [...prev, stopMessage]);
+
+      } catch (error) {
+        console.error('❌ Failed to stop batch:', error);
+
+        // Show error message
+        const errorMessage = {
+          id: (Date.now() + Math.random()).toString(),
+          role: 'assistant',
+          content: `❌ Failed to stop batch: ${error instanceof Error ? error.message : 'Unknown error'}`
+        };
+        setMessages(prev => [...prev, errorMessage]);
+      }
+      return;
+    }
+
+    // Fall back to single task stop (original behavior)
     if (!currentTaskId) {
       console.warn('⚠️ No active task to stop');
       return;
@@ -1209,9 +1402,9 @@ export default function ChatPanel({
             onChange={handleInputChange}
             placeholder="Tell me what you'd like me to do..."
             className="flex-1 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            disabled={isLoading || isWaitingForApproval}
+            disabled={isLoading || isWaitingForApproval || isBatchRunning}
           />
-          {isLoading ? (
+          {(isLoading || isBatchRunning) ? (
             <button
               type="button"
               onClick={handleStop}

@@ -105,6 +105,13 @@ export class BatchExecutor {
         const taskId = this.taskIds[i];
         const isLastTask = i === this.tasks.length - 1;
 
+        // Check if batch was stopped before starting this task
+        const batchStatus = await this.checkBatchStatus();
+        if (batchStatus === 'stopped') {
+          console.log(`🛑 Batch ${this.batchExecutionId} was stopped - not starting task ${i + 1}`);
+          break;
+        }
+
         console.log(`\n📝 Executing task ${i + 1}/${this.tasks.length} (ID: ${taskId})`);
 
         try {
@@ -418,6 +425,25 @@ export class BatchExecutor {
   }
 
   /**
+   * Check the current status of the batch execution
+   * Returns 'stopped' if user has requested batch stop
+   */
+  private async checkBatchStatus(): Promise<string> {
+    try {
+      const { data: batch } = await supabase
+        .from('batch_executions')
+        .select('status')
+        .eq('id', this.batchExecutionId)
+        .single();
+
+      return batch?.status || 'running';
+    } catch (error) {
+      console.error('⚠️ Failed to check batch status:', error);
+      return 'running'; // Assume running if we can't check
+    }
+  }
+
+  /**
    * Increment completed_count or failed_count
    */
   private async incrementBatchCount(type: 'completed' | 'failed'): Promise<void> {
@@ -471,6 +497,13 @@ export class BatchExecutor {
 
     while (Date.now() - startTime < timeoutMs) {
       await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+
+      // Check if batch was stopped while waiting
+      const batchStatus = await this.checkBatchStatus();
+      if (batchStatus === 'stopped') {
+        console.log(`🛑 Batch stopped while waiting for task ${taskId}`);
+        return 'stopped';
+      }
 
       const { data: task } = await supabase
         .from('tasks')
