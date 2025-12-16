@@ -1847,19 +1847,42 @@ export async function samplingLoopWithStreaming(
           }
         }
 
-        // Update chat session with completion metrics and mark as completed
+        // Update chat session ONLY if this is NOT a batch task
+        // Batch sessions are marked completed when the entire batch finishes (in BatchExecutor)
         if (!sessionId.startsWith('fallback-')) {
           try {
-            await supabase
-              .from('chat_sessions')
-              .update({
-                status: 'completed',
-                completed_at: new Date().toISOString(),
-                total_conversation_time_ms: totalConversationTimeMs,
-                total_iterations: iteration + 1
-              })
-              .eq('id', sessionId);
-            console.log('✅ Chat session marked as completed with metrics');
+            // Check if this task is part of a batch execution
+            const { data: batchCheck } = await supabase
+              .from('batch_executions')
+              .select('id')
+              .eq('session_id', sessionId)
+              .in('status', ['running', 'completed'])
+              .limit(1)
+              .maybeSingle();
+
+            if (!batchCheck) {
+              // NOT a batch task - mark session completed (original behavior)
+              await supabase
+                .from('chat_sessions')
+                .update({
+                  status: 'completed',
+                  completed_at: new Date().toISOString(),
+                  total_conversation_time_ms: totalConversationTimeMs,
+                  total_iterations: iteration + 1
+                })
+                .eq('id', sessionId);
+              console.log('✅ Chat session marked as completed with metrics');
+            } else {
+              // Batch task - only update metrics, keep session active
+              await supabase
+                .from('chat_sessions')
+                .update({
+                  total_conversation_time_ms: totalConversationTimeMs,
+                  total_iterations: iteration + 1
+                })
+                .eq('id', sessionId);
+              console.log('ℹ️ Batch task completed - session remains active (batch handles completion)');
+            }
           } catch (error) {
             console.error('⚠️ Failed to update chat session:', error);
           }

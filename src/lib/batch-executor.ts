@@ -202,11 +202,39 @@ export class BatchExecutor {
       await this.updateBatchStatus('completed');
       console.log(`✅ Batch execution completed: ${this.batchExecutionId}`);
 
+      // Mark chat session as completed when batch finishes
+      try {
+        await supabase
+          .from('chat_sessions')
+          .update({
+            status: 'completed',
+            completed_at: new Date().toISOString()
+          })
+          .eq('id', this.sessionId);
+        console.log(`✅ Chat session ${this.sessionId} marked as completed (batch finished)`);
+      } catch (sessionError) {
+        console.error('⚠️ Failed to mark chat session as completed:', sessionError);
+      }
+
     } catch (error: any) {
       console.error(`❌ Batch execution failed:`, error);
 
       // Mark batch as failed
       await this.updateBatchStatus('failed', error.message);
+
+      // Mark chat session as failed when batch fails
+      try {
+        await supabase
+          .from('chat_sessions')
+          .update({
+            status: 'completed', // Use 'completed' not 'failed' - session completed with failures
+            completed_at: new Date().toISOString()
+          })
+          .eq('id', this.sessionId);
+        console.log(`✅ Chat session ${this.sessionId} marked as completed (batch failed)`);
+      } catch (sessionError) {
+        console.error('⚠️ Failed to mark chat session as completed:', sessionError);
+      }
 
       // Try to cleanup browser if it was created
       if (this.browserSessionId) {

@@ -140,8 +140,14 @@ npm run lint     # ESLint
 - Webhooks include evidence (screenshots, extracted data)
 - Browser persists if task paused (not destroyed)
 
+### Session Lifecycle (Batch Executions)
+- Individual task completion does NOT mark session as `completed` for batch tasks
+- Session marked `completed` only when entire batch finishes (in BatchExecutor)
+- This allows user input during paused tasks without 400 errors
+
 ## Current Work (Dec 2025)
 - STOP button for batch executions (completed)
 - Loading indicator fixes for paused tasks (completed - explicit `paused` status handling in Supabase subscription)
+- Session completion fix for batch tasks (completed - session stays active until batch finishes)
 - OnKernel SDK upgraded to 0.22.0
 - Token metrics and config overrides support
