@@ -34,9 +34,9 @@ export default function ChatPanel({
   const [isStreamingSSE, setIsStreamingSSE] = useState(false); // Track when SSE is active to pause Realtime
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Derived value: check if batch execution is running (either batch status or any task running)
-  const isBatchRunning = batchContext?.status === 'running' ||
-    (batchContext?.tasks?.some((t: any) => t.status === 'running') ?? false);
+  // Derived value: check if any task is actively running (not batch status)
+  // When a task is 'paused', we want to allow user input
+  const isBatchRunning = batchContext?.tasks?.some((t: any) => t.status === 'running') ?? false;
 
   // Statuses where loading indicator should be cleared (agent not actively working)
   const LOADING_CLEAR_STATUSES = ['completed', 'failed', 'stopped', 'paused'];
@@ -150,6 +150,14 @@ export default function ChatPanel({
             onAgentActiveChange(true);
             setCurrentTaskId(updatedTask.id);
             setTaskStatus('running');
+          }
+
+          // Clear isLoading when a task is paused (needs user input)
+          if (updatedTask.status === 'paused') {
+            console.log('⏸️ Task paused - clearing loading for user input');
+            setIsLoading(false);
+            onAgentActiveChange(false);
+            setTaskStatus('paused');
           }
 
           // Track if we need to clear loading state (set inside callback, used outside)
@@ -727,8 +735,12 @@ export default function ChatPanel({
                   // Handle task status updates from agent
                   console.log('📊 Task status update:', data.status, data.message);
                   setTaskStatus(data.status);
-                  // Note: Don't create a separate status message here
-                  // The agent's message with report_task_status tool call will already display the status
+                  // Clear loading when task needs clarification (waiting for user input)
+                  if (data.status === 'needs_clarification') {
+                    console.log('⏸️ Task needs clarification - clearing loading so user can respond');
+                    setIsLoading(false);
+                    onAgentActiveChange(false);
+                  }
                   break;
 
                 case 'done':
